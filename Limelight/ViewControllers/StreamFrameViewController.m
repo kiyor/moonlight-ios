@@ -12,6 +12,7 @@
 #import "StreamManager.h"
 #import "ControllerSupport.h"
 #import "DataManager.h"
+#include <Limelight.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -57,6 +58,7 @@
     UIVisualEffectView *_sidePanel;
     UISegmentedControl *_oscSegment;
     BOOL _sidePanelOpen;
+    NSArray<NSArray *> *_comboKeys;
 #endif
 }
 
@@ -740,25 +742,157 @@ static const CGFloat kSideHandleHeight = 64;
     dcfg.baseForegroundColor = UIColor.systemRedColor;
     disconnectBtn.configuration = dcfg;
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, keyboardBtn, disconnectBtn]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, keyboardBtn]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 12;
     [stack setCustomSpacing:20 afterView:title];
     [stack setCustomSpacing:6 afterView:oscLabel];
     [stack setCustomSpacing:20 afterView:_oscSegment];
-    [stack setCustomSpacing:28 afterView:keyboardBtn];
+    [stack setCustomSpacing:20 afterView:keyboardBtn];
+    [self addComboSectionsToStack:stack];
+    [stack addArrangedSubview:disconnectBtn];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [_sidePanel.contentView addSubview:stack];
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.alwaysBounceVertical = YES;
+    [_sidePanel.contentView addSubview:scroll];
+    [scroll addSubview:stack];
     UILayoutGuide *g = _sidePanel.contentView.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        [stack.topAnchor constraintEqualToAnchor:g.topAnchor constant:16],
-        [stack.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:16],
-        [stack.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-16],
+        [scroll.topAnchor constraintEqualToAnchor:g.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:16],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-16],
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.leadingAnchor constant:16],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.trailingAnchor constant:-16],
     ]];
 
     [self.view addSubview:_sideHandle];
     [self.view addSubview:_sideDim];
     [self.view addSubview:_sidePanel];
+}
+
+// Windows virtual-key codes
+#define VK_WIN 0x5B
+#define VK_CTRL 0xA2
+#define VK_ALT 0xA4
+#define VK_SHIFT 0xA0
+
+- (void)addComboSectionsToStack:(UIStackView *)stack {
+    // { section title, @[ @[label, @[vk...]], ... ] }
+    NSArray *sections = @[
+        @[@"窗口", @[
+            @[@"资源管理器", @[@VK_WIN, @0x45]],
+            @[@"显示桌面", @[@VK_WIN, @0x44]],
+            @[@"开始菜单", @[@VK_WIN]],
+            @[@"任务视图", @[@VK_WIN, @0x09]],
+            @[@"切换窗口", @[@VK_ALT, @0x09]],
+            @[@"关闭窗口", @[@VK_ALT, @0x73]],
+            @[@"任务管理器", @[@VK_CTRL, @VK_SHIFT, @0x1B]],
+            @[@"运行", @[@VK_WIN, @0x52]],
+            @[@"设置", @[@VK_WIN, @0x49]],
+            @[@"截图", @[@VK_WIN, @VK_SHIFT, @0x53]],
+            @[@"全屏切换", @[@VK_ALT, @0x0D]],
+            @[@"最大化", @[@VK_WIN, @0x26]],
+        ]],
+        @[@"编辑", @[
+            @[@"复制", @[@VK_CTRL, @0x43]],
+            @[@"粘贴", @[@VK_CTRL, @0x56]],
+            @[@"剪切", @[@VK_CTRL, @0x58]],
+            @[@"撤销", @[@VK_CTRL, @0x5A]],
+            @[@"全选", @[@VK_CTRL, @0x41]],
+            @[@"保存", @[@VK_CTRL, @0x53]],
+        ]],
+        @[@"按键", @[
+            @[@"Esc", @[@0x1B]],
+            @[@"Enter", @[@0x0D]],
+            @[@"Tab", @[@0x09]],
+            @[@"Delete", @[@0x2E]],
+            @[@"F5", @[@0x74]],
+            @[@"F11", @[@0x7A]],
+        ]],
+    ];
+
+    NSMutableArray *all = [NSMutableArray array];
+    for (NSArray *section in sections) {
+        UILabel *label = [[UILabel alloc] init];
+        label.text = section[0];
+        label.font = [UIFont systemFontOfSize:13];
+        label.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+        [stack addArrangedSubview:label];
+        [stack setCustomSpacing:6 afterView:label];
+
+        NSArray *items = section[1];
+        UIStackView *row = nil;
+        for (NSUInteger i = 0; i < items.count; i++) {
+            if (i % 3 == 0) {
+                row = [[UIStackView alloc] init];
+                row.axis = UILayoutConstraintAxisHorizontal;
+                row.distribution = UIStackViewDistributionFillEqually;
+                row.spacing = 6;
+                [stack addArrangedSubview:row];
+                [stack setCustomSpacing:6 afterView:row];
+            }
+            UIButtonConfiguration *cfg = [UIButtonConfiguration grayButtonConfiguration];
+            cfg.title = items[i][0];
+            cfg.baseForegroundColor = UIColor.whiteColor;
+            cfg.contentInsets = NSDirectionalEdgeInsetsMake(8, 2, 8, 2);
+            cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
+                NSMutableDictionary *m = [attrs mutableCopy];
+                m[NSFontAttributeName] = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+                return m;
+            };
+            UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
+            b.titleLabel.adjustsFontSizeToFitWidth = YES;
+            b.tag = all.count;
+            [all addObject:items[i][1]];
+            [b addTarget:self action:@selector(comboTapped:) forControlEvents:UIControlEventTouchUpInside];
+            [b.heightAnchor constraintEqualToConstant:40].active = YES;
+            [row addArrangedSubview:b];
+        }
+        // pad the last row so buttons keep equal width
+        while (row.arrangedSubviews.count < 3) {
+            [row addArrangedSubview:[[UIView alloc] init]];
+        }
+        [stack setCustomSpacing:16 afterView:row];
+    }
+    _comboKeys = all;
+}
+
+static char modifierForVk(short vk) {
+    switch (vk) {
+        case VK_WIN: return MODIFIER_META;
+        case VK_CTRL: return MODIFIER_CTRL;
+        case VK_ALT: return MODIFIER_ALT;
+        case VK_SHIFT: return MODIFIER_SHIFT;
+        default: return 0;
+    }
+}
+
+- (void)comboTapped:(UIButton *)sender {
+    NSArray<NSNumber *> *keys = _comboKeys[sender.tag];
+    [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight].impactOccurred;
+    [self closeSidePanel];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        // Let the panel close animation start before the host reacts
+        usleep(150 * 1000);
+        char mods = 0;
+        for (NSNumber *k in keys) {
+            short vk = k.shortValue;
+            mods |= modifierForVk(vk);
+            LiSendKeyboardEvent(vk, KEY_ACTION_DOWN, mods);
+            usleep(20 * 1000);
+        }
+        usleep(50 * 1000);
+        for (NSNumber *k in keys.reverseObjectEnumerator) {
+            short vk = k.shortValue;
+            LiSendKeyboardEvent(vk, KEY_ACTION_UP, mods);
+            mods &= ~modifierForVk(vk);
+            usleep(20 * 1000);
+        }
+    });
 }
 
 - (UIButton *)sidePanelButton:(NSString *)title symbol:(NSString *)symbol action:(SEL)action {
