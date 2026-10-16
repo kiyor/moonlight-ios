@@ -1209,6 +1209,18 @@ static const CGFloat kSideHandleHeight = 64;
     }] forControlEvents:UIControlEventValueChanged];
     [touch addArrangedSubview:vm];
     [touch addArrangedSubview:[self sideHint:@"屏上浮一组左键 / 中键 / 右键和滚轮，按住可拖动左键实现框选拖拽。长按空白处拖动整组换位置。"]];
+    [touch setCustomSpacing:18 afterView:touch.arrangedSubviews.lastObject];
+    [touch addArrangedSubview:[self sideSectionLabel:@"实体手柄"]];
+    MLOptionGroup *pm = [[MLOptionGroup alloc] initWithItems:@[@"手柄", @"当鼠标用"]];
+    pm.selectedSegmentIndex = 0;
+    [pm addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        typeof(self) ss = wsv;
+        if (ss) {
+            ss->_controllerSupport.padMouseMode = ((MLOptionGroup *)a.sender).selectedSegmentIndex == 1;
+        }
+    }] forControlEvents:UIControlEventValueChanged];
+    [touch addArrangedSubview:pm];
+    [touch addArrangedSubview:[self sideHint:@"当鼠标用：左摇杆移动光标，右摇杆滚轮，A 左键 / B 右键 / X 中键；其余按键照常发给主机。只对本次串流有效。"]];
     _sidePages[@"touch"] = [self sideScrollPage:touch];
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.vmouse"]) {
         dispatch_async(dispatch_get_main_queue(), ^{ [wsv setVirtualMouseVisible:YES]; });

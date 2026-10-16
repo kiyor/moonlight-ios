@@ -29,6 +29,11 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     
     NSLock *_controllerStreamLock;
     NSMutableDictionary *_controllers;
+    NSTimer *_padMouseTimer;
+    uint32_t _padMouseButtons;
+    float _padScrollAccum;
+    float _padMoveAccumX, _padMoveAccumY;
+    _Atomic short _padLX, _padLY, _padRY;
     id<ControllerSupportDelegate> _delegate;
     
     float accumulatedDeltaX;
@@ -355,6 +360,22 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             }
             
             // Player 1 is always present for OSC
+            if (_padMouseMode) {
+                uint32_t changed = buttonFlags ^ _padMouseButtons;
+                int map[][2] = {{A_FLAG, BUTTON_LEFT}, {B_FLAG, BUTTON_RIGHT}, {X_FLAG, BUTTON_MIDDLE}};
+                for (int i = 0; i < 3; i++) {
+                    if (changed & map[i][0]) {
+                        LiSendMouseButtonEvent((buttonFlags & map[i][0]) ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, map[i][1]);
+                    }
+                }
+                _padMouseButtons = buttonFlags;
+                _padLX = leftStickX;
+                _padLY = leftStickY;
+                _padRY = rightStickY;
+                // Gamepad itself goes silent on the host while in mouse mode
+                buttonFlags &= ~(A_FLAG | B_FLAG | X_FLAG);
+                leftStickX = leftStickY = rightStickX = rightStickY = 0;
+            }
             LiSendMultiControllerEvent(_multiController ? controller.playerIndex : 0, [self getActiveGamepadMask],
                                        buttonFlags, leftTrigger, rightTrigger,
                                        leftStickX, leftStickY, rightStickX, rightStickY);
@@ -1232,6 +1253,64 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 }
 
 -(void) cleanup
+{
+    [self setPadMouseMode:NO];
+    [self cleanupControllersAndObservers];
+}
+
+-(void) setPadMouseMode:(BOOL)on
+{
+    _padMouseMode = on;
+    [_padMouseTimer invalidate];
+    _padMouseTimer = nil;
+    _padLX = _padLY = _padRY = 0;
+    if (!on) {
+        // Release anything still held so the host doesn't see a stuck button
+        int map[][2] = {{A_FLAG, BUTTON_LEFT}, {B_FLAG, BUTTON_RIGHT}, {X_FLAG, BUTTON_MIDDLE}};
+        for (int i = 0; i < 3; i++) {
+            if (_padMouseButtons & map[i][0]) {
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, map[i][1]);
+            }
+        }
+        _padMouseButtons = 0;
+        return;
+    }
+    __weak typeof(self) ws = self;
+    _padMouseTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 120 repeats:YES block:^(NSTimer *t) {
+        [ws padMouseTick];
+    }];
+}
+
+-(void) padMouseTick
+{
+    const float dead = 0.15f;
+    float x = _padLX / 32767.0f, y = _padLY / 32767.0f;
+    float mag = sqrtf(x * x + y * y);
+    if (mag > dead) {
+        // Quadratic curve: fine control near center, fast at full tilt (~1400 px/s)
+        float speed = powf((mag - dead) / (1 - dead), 2) * 12.0f;
+        _padMoveAccumX += x / mag * speed;
+        _padMoveAccumY -= y / mag * speed;
+        short dx = (short)_padMoveAccumX, dy = (short)_padMoveAccumY;
+        if (dx || dy) {
+            LiSendMouseMoveEvent(dx, dy);
+            _padMoveAccumX -= dx;
+            _padMoveAccumY -= dy;
+        }
+    }
+    float ry = _padRY / 32767.0f;
+    if (fabsf(ry) > dead) {
+        _padScrollAccum += ry * 4.0f;
+        short s = (short)_padScrollAccum;
+        if (s) {
+            LiSendHighResScrollEvent(s);
+            _padScrollAccum -= s;
+        }
+    }
+}
+
+// Upstream's original -cleanup body
+-(void) cleanupControllersAndObservers
 {
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerDisconnectObserver];

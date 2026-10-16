@@ -24,6 +24,9 @@
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate;
 -(void) connectionEstablished;
 
+// 手柄键鼠模式: left stick = mouse, right stick = wheel, A = left click, B = right click, X = middle
+@property (nonatomic) BOOL padMouseMode;
+
 -(void) initAutoOnScreenControlMode:(OnScreenControls*)osc;
 -(void) cleanup;
 -(Controller*) getOscController;
