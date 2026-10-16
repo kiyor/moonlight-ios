@@ -33,6 +33,87 @@
 
 static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
 
+// Windows virtual-key codes
+#define VK_WIN 0x5B
+#define VK_CTRL 0xA2
+#define VK_ALT 0xA4
+#define VK_SHIFT 0xA0
+
+// Self-drawn option group (replaces UISegmentedControl in the side panel).
+// Mirrors the segmented API we use: selectedSegmentIndex + UIControlEventValueChanged.
+@interface MLOptionGroup : UIControl
+- (instancetype)initWithItems:(NSArray<NSString *> *)items;
+@property (nonatomic) NSInteger selectedSegmentIndex;
+@end
+
+@implementation MLOptionGroup {
+    NSArray<UIButton *> *_buttons;
+}
+
+- (instancetype)initWithItems:(NSArray<NSString *> *)items {
+    self = [super initWithFrame:CGRectZero];
+    if (self) {
+        NSMutableArray *bs = [NSMutableArray array];
+        for (NSUInteger i = 0; i < items.count; i++) {
+            UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
+            cfg.title = items[i];
+            cfg.baseForegroundColor = UIColor.whiteColor;
+            cfg.background.cornerRadius = 10;
+            cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
+                NSMutableDictionary *m = [attrs mutableCopy];
+                m[NSFontAttributeName] = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+                return m;
+            };
+            __weak typeof(self) ws = self;
+            UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:[UIAction actionWithHandler:^(UIAction *a) {
+                [ws tapped:i];
+            }]];
+            [bs addObject:b];
+        }
+        _buttons = bs;
+        UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:bs];
+        row.axis = UILayoutConstraintAxisHorizontal;
+        row.distribution = UIStackViewDistributionFillEqually;
+        row.spacing = 8;
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+        [self addSubview:row];
+        [NSLayoutConstraint activateConstraints:@[
+            [row.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [row.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            [row.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [row.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+            [row.heightAnchor constraintEqualToConstant:42],
+        ]];
+        _selectedSegmentIndex = -1;
+        [self restyle];
+    }
+    return self;
+}
+
+- (void)tapped:(NSUInteger)i {
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    self.selectedSegmentIndex = i;
+    [self sendActionsForControlEvents:UIControlEventValueChanged];
+}
+
+- (void)setSelectedSegmentIndex:(NSInteger)idx {
+    _selectedSegmentIndex = idx;
+    [self restyle];
+}
+
+- (void)restyle {
+    for (NSUInteger i = 0; i < _buttons.count; i++) {
+        UIButton *b = _buttons[i];
+        UIButtonConfiguration *c = b.configuration;
+        BOOL on = (NSInteger)i == _selectedSegmentIndex;
+        c.background.backgroundColor = on ? [UIColor.systemGreenColor colorWithAlphaComponent:0.55] : [UIColor colorWithWhite:1 alpha:0.1];
+        c.background.strokeColor = on ? [UIColor.systemGreenColor colorWithAlphaComponent:0.9] : UIColor.clearColor;
+        c.background.strokeWidth = on ? 1 : 0;
+        b.configuration = c;
+    }
+}
+@end
+
 @implementation StreamFrameViewController {
     ControllerSupport *_controllerSupport;
     StreamManager *_streamMan;
@@ -58,9 +139,9 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
     UIButton *_sideHandle;
     UIView *_sideDim;
     UIVisualEffectView *_sidePanel;
-    UISegmentedControl *_oscSegment;
-    UISegmentedControl *_statsSegment;
-    UISegmentedControl *_touchSegment;
+    MLOptionGroup *_oscSegment;
+    MLOptionGroup *_statsSegment;
+    MLOptionGroup *_touchSegment;
     UILabel *_compactStatsLabel;
     NSInteger _statsMode; // 0 off, 1 compact, 2 full
     NSMutableSet<NSString *> *_statsItemsOn;
@@ -69,6 +150,17 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
     NSArray<NSArray *> *_comboKeys;
     UIStackView *_customComboStack;
     NSMutableArray<NSDictionary *> *_customCombos;
+    UIView *_sidePageHost;
+    UIView *_sideRootPage;
+    UIView *_sideCurrentPage;
+    NSMutableDictionary<NSString *, UIView *> *_sidePages;
+    NSMutableDictionary<NSString *, UILabel *> *_sideRowValues;
+    UILabel *_sideClockLabel;
+    UIButton *_statsTile;
+    UIButton *_oscTile;
+    UIButton *_touchTile;
+    NSInteger _lastStatsMode;
+    OnScreenControlsLevel _lastOscLevel;
 #endif
 }
 
@@ -753,82 +845,407 @@ static const CGFloat kSideHandleHeight = 64;
     swipeClose.direction = UISwipeGestureRecognizerDirectionRight;
     [_sidePanel addGestureRecognizer:swipeClose];
 
-    UILabel *title = [[UILabel alloc] init];
-    title.text = @"月光";
-    title.font = [UIFont boldSystemFontOfSize:20];
-    title.textColor = UIColor.whiteColor;
+    __weak typeof(self) ws = self;
+    UIView *content = _sidePanel.contentView;
+    UILayoutGuide *g = content.safeAreaLayoutGuide;
 
-    UILabel *oscLabel = [[UILabel alloc] init];
-    oscLabel.text = @"虚拟按键";
-    oscLabel.font = [UIFont systemFontOfSize:13];
-    oscLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    // Rail on the outer (thumb) edge: one-tap desktop actions, like 阿西西's right column
+    UIView *railBg = [[UIView alloc] init];
+    railBg.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+    railBg.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:railBg];
+    UIStackView *rail = [[UIStackView alloc] init];
+    rail.axis = UILayoutConstraintAxisVertical;
+    rail.distribution = UIStackViewDistributionFillEqually;
+    rail.spacing = 4;
+    rail.translatesAutoresizingMaskIntoConstraints = NO;
+    NSArray *railDefs = @[@[@"键盘", @"keyboard"], @[@"桌面", @"menubar.dock.rectangle"],
+                          @[@"全部窗口", @"rectangle.3.group"], @[@"切换窗口", @"arrow.left.arrow.right.square"],
+                          @[@"收起", @"chevron.right.2"]];
+    NSArray *railActions = @[
+        ^{ [ws sideKeyboardTapped]; },
+        ^{ [ws sendCombo:@[@VK_WIN, @0x44]]; },
+        ^{ [ws sendCombo:@[@VK_WIN, @0x09]]; },
+        ^{ [ws sendCombo:@[@VK_ALT, @0x09]]; },
+        ^{ [ws closeSidePanel]; },
+    ];
+    for (NSUInteger i = 0; i < railDefs.count; i++) {
+        UIButton *b = [self sideTile:railDefs[i][0] symbol:railDefs[i][1] height:0 handler:railActions[i]];
+        UIButtonConfiguration *c = b.configuration;
+        c.background.backgroundColor = UIColor.clearColor;
+        b.configuration = c;
+        [rail addArrangedSubview:b];
+    }
+    [content addSubview:rail];
 
-    _oscSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"简易", @"完整"]];
-    [_oscSegment addTarget:self action:@selector(oscSegmentChanged:) forControlEvents:UIControlEventValueChanged];
-
-    UILabel *statsLabel = [[UILabel alloc] init];
-    statsLabel.text = @"性能信息";
-    statsLabel.font = [UIFont systemFontOfSize:13];
-    statsLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
-    _statsSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"详细", @"原版"]];
-    [_statsSegment addTarget:self action:@selector(statsSegmentChanged:) forControlEvents:UIControlEventValueChanged];
-    UIStackView *statsGrid = [self statsItemGrid];
-
-    UILabel *touchLabel = [[UILabel alloc] init];
-    touchLabel.text = @"触控模式";
-    touchLabel.font = [UIFont systemFontOfSize:13];
-    touchLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
-    _touchSegment = [[UISegmentedControl alloc] initWithItems:@[@"触控板", @"直接点击"]];
-    [_touchSegment addTarget:self action:@selector(touchSegmentChanged:) forControlEvents:UIControlEventValueChanged];
-
-    UIButton *keyboardBtn = [self sidePanelButton:@"键盘" symbol:@"keyboard" action:@selector(sideKeyboardTapped)];
-    UIButton *disconnectBtn = [self sidePanelButton:@"断开连接" symbol:@"xmark.circle" action:@selector(sideDisconnectTapped)];
-    UIButtonConfiguration *dcfg = disconnectBtn.configuration;
-    dcfg.baseForegroundColor = UIColor.systemRedColor;
-    disconnectBtn.configuration = dcfg;
-
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, touchLabel, _touchSegment, statsLabel, _statsSegment, statsGrid, keyboardBtn]];
-    stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 12;
-    [stack setCustomSpacing:20 afterView:title];
-    [stack setCustomSpacing:6 afterView:oscLabel];
-    [stack setCustomSpacing:20 afterView:_oscSegment];
-    [stack setCustomSpacing:6 afterView:touchLabel];
-    [stack setCustomSpacing:20 afterView:_touchSegment];
-    [stack setCustomSpacing:6 afterView:statsLabel];
-    [stack setCustomSpacing:6 afterView:_statsSegment];
-    [stack setCustomSpacing:20 afterView:statsGrid];
-    [stack setCustomSpacing:20 afterView:keyboardBtn];
-    [self addComboSectionsToStack:stack];
-    [stack addArrangedSubview:disconnectBtn];
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    UIScrollView *scroll = [[UIScrollView alloc] init];
-    scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    scroll.alwaysBounceVertical = YES;
-    [_sidePanel.contentView addSubview:scroll];
-    [scroll addSubview:stack];
-    UILayoutGuide *g = _sidePanel.contentView.safeAreaLayoutGuide;
+    _sidePageHost = [[UIView alloc] init];
+    _sidePageHost.clipsToBounds = YES;
+    _sidePageHost.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:_sidePageHost];
     [NSLayoutConstraint activateConstraints:@[
-        [scroll.topAnchor constraintEqualToAnchor:g.topAnchor],
-        [scroll.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
-        [scroll.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
-        [scroll.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
-        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:16],
-        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-16],
-        [stack.leadingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.leadingAnchor constant:16],
-        [stack.trailingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.trailingAnchor constant:-16],
+        [rail.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
+        [rail.topAnchor constraintEqualToAnchor:g.topAnchor constant:12],
+        [rail.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-12],
+        [rail.widthAnchor constraintEqualToConstant:64],
+        [railBg.leadingAnchor constraintEqualToAnchor:rail.leadingAnchor],
+        [railBg.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [railBg.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [railBg.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
+        [_sidePageHost.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
+        [_sidePageHost.trailingAnchor constraintEqualToAnchor:rail.leadingAnchor],
+        [_sidePageHost.topAnchor constraintEqualToAnchor:g.topAnchor],
+        [_sidePageHost.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
     ]];
+
+    _sideRowValues = [NSMutableDictionary dictionary];
+    _sidePages = [NSMutableDictionary dictionary];
+    _sideRootPage = [self buildSideRootPage];
+    [self buildSideSubPages];
+    [self installSidePage:_sideRootPage];
+    _sideCurrentPage = _sideRootPage;
 
     [self.view addSubview:_sideHandle];
     [self.view addSubview:_sideDim];
     [self.view addSubview:_sidePanel];
 }
 
-// Windows virtual-key codes
-#define VK_WIN 0x5B
-#define VK_CTRL 0xA2
-#define VK_ALT 0xA4
-#define VK_SHIFT 0xA0
+- (UIButton *)sideTile:(NSString *)title symbol:(NSString *)symbol height:(CGFloat)h handler:(void (^)(void))handler {
+    UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
+    cfg.title = title;
+    cfg.image = [UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightMedium]];
+    cfg.imagePlacement = NSDirectionalRectEdgeTop;
+    cfg.imagePadding = 5;
+    cfg.baseForegroundColor = UIColor.whiteColor;
+    cfg.contentInsets = NSDirectionalEdgeInsetsMake(6, 2, 6, 2);
+    cfg.background.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
+    cfg.background.cornerRadius = 10;
+    cfg.titleLineBreakMode = NSLineBreakByTruncatingTail;
+    cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
+        NSMutableDictionary *m = [attrs mutableCopy];
+        m[NSFontAttributeName] = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        return m;
+    };
+    UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:[UIAction actionWithHandler:^(UIAction *a) { handler(); }]];
+    if (h > 0) {
+        [b.heightAnchor constraintEqualToConstant:h].active = YES;
+    }
+    return b;
+}
+
+- (UIStackView *)sideTileRow:(NSArray<UIView *> *)tiles {
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:tiles];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.distribution = UIStackViewDistributionFillEqually;
+    row.spacing = 8;
+    return row;
+}
+
+- (UILabel *)sideSectionLabel:(NSString *)text {
+    UILabel *l = [[UILabel alloc] init];
+    l.text = text;
+    l.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    l.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    return l;
+}
+
+- (UIButton *)sideNavRow:(NSString *)title symbol:(NSString *)symbol page:(NSString *)key {
+    __weak typeof(self) ws = self;
+    UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
+    cfg.title = title;
+    cfg.image = [UIImage systemImageNamed:symbol];
+    cfg.imagePadding = 10;
+    cfg.baseForegroundColor = UIColor.whiteColor;
+    cfg.contentInsets = NSDirectionalEdgeInsetsMake(0, 12, 0, 12);
+    cfg.background.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+    cfg.background.cornerRadius = 10;
+    UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:[UIAction actionWithHandler:^(UIAction *a) { [ws pushSidePage:key]; }]];
+    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+    [b.heightAnchor constraintEqualToConstant:46].active = YES;
+    UILabel *v = [[UILabel alloc] init];
+    v.font = [UIFont systemFontOfSize:13];
+    v.textColor = [UIColor colorWithWhite:1 alpha:0.5];
+    UIImageView *chev = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+    chev.tintColor = [UIColor colorWithWhite:1 alpha:0.35];
+    UIStackView *trail = [[UIStackView alloc] initWithArrangedSubviews:@[v, chev]];
+    trail.spacing = 6;
+    trail.alignment = UIStackViewAlignmentCenter;
+    trail.userInteractionEnabled = NO;
+    trail.translatesAutoresizingMaskIntoConstraints = NO;
+    [b addSubview:trail];
+    [NSLayoutConstraint activateConstraints:@[
+        [trail.trailingAnchor constraintEqualToAnchor:b.trailingAnchor constant:-12],
+        [trail.centerYAnchor constraintEqualToAnchor:b.centerYAnchor],
+    ]];
+    _sideRowValues[key] = v;
+    return b;
+}
+
+- (UIView *)sideScrollPage:(UIStackView *)stack {
+    UIView *page = [[UIView alloc] init];
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.alwaysBounceVertical = YES;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [page addSubview:scroll];
+    [scroll addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor constraintEqualToAnchor:page.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:page.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:14],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-14],
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.leadingAnchor constant:14],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.trailingAnchor constant:-12],
+    ]];
+    return page;
+}
+
+- (UIView *)buildSideRootPage {
+    __weak typeof(self) ws = self;
+    UILabel *title = [[UILabel alloc] init];
+    title.text = @"月光";
+    title.font = [UIFont boldSystemFontOfSize:20];
+    title.textColor = UIColor.whiteColor;
+    _sideClockLabel = [[UILabel alloc] init];
+    _sideClockLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightRegular];
+    _sideClockLabel.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    _sideClockLabel.textAlignment = NSTextAlignmentRight;
+    UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[title, _sideClockLabel]];
+    header.alignment = UIStackViewAlignmentCenter;
+
+    UIButton *dc = [self sideTile:@"断开连接" symbol:@"xmark.circle" height:60 handler:^{ [ws sideDisconnectTapped]; }];
+    UIButtonConfiguration *dcfg = dc.configuration;
+    dcfg.baseForegroundColor = UIColor.systemRedColor;
+    dc.configuration = dcfg;
+    _statsTile = [self sideTile:@"性能信息" symbol:@"speedometer" height:60 handler:^{ [ws statsTileTapped]; }];
+    [_statsTile addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(statsTileLongPressed:)]];
+    _oscTile = [self sideTile:@"虚拟手柄" symbol:@"gamecontroller" height:60 handler:^{ [ws oscTileTapped]; }];
+    [_oscTile addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(oscTileLongPressed:)]];
+    _touchTile = [self sideTile:@"触控板" symbol:@"hand.point.up.left" height:60 handler:^{ [ws touchTileTapped]; }];
+    UIButton *explorer = [self sideTile:@"资源管理器" symbol:@"folder" height:60 handler:^{ [ws sendCombo:@[@VK_WIN, @0x45]]; }];
+    UIButton *taskmgr = [self sideTile:@"任务管理器" symbol:@"list.bullet.rectangle" height:60 handler:^{ [ws sendCombo:@[@VK_CTRL, @VK_SHIFT, @0x1B]]; }];
+    UIButton *shot = [self sideTile:@"截图" symbol:@"camera.viewfinder" height:60 handler:^{ [ws sendCombo:@[@VK_WIN, @VK_SHIFT, @0x53]]; }];
+    UIButton *esc = [self sideTile:@"Esc" symbol:@"escape" height:60 handler:^{ [ws sendCombo:@[@0x1B]]; }];
+
+    UIStackView *rows = [[UIStackView alloc] initWithArrangedSubviews:@[
+        [self sideNavRow:@"快捷键" symbol:@"command" page:@"combo"],
+        [self sideNavRow:@"性能信息" symbol:@"speedometer" page:@"stats"],
+        [self sideNavRow:@"虚拟手柄" symbol:@"gamecontroller" page:@"osc"],
+        [self sideNavRow:@"鼠标与触控" symbol:@"cursorarrow.motionlines" page:@"touch"],
+    ]];
+    rows.axis = UILayoutConstraintAxisVertical;
+    rows.spacing = 6;
+
+    UILabel *section = [self sideSectionLabel:@"功能设置"];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
+        header,
+        [self sideTileRow:@[dc, _statsTile, _oscTile, _touchTile]],
+        [self sideTileRow:@[explorer, taskmgr, shot, esc]],
+        section, rows]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 8;
+    [stack setCustomSpacing:14 afterView:header];
+    [stack setCustomSpacing:18 afterView:stack.arrangedSubviews[2]];
+    return [self sideScrollPage:stack];
+}
+
+- (UIStackView *)sideSubStack:(NSString *)title {
+    __weak typeof(self) ws = self;
+    UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
+    cfg.title = title;
+    cfg.image = [UIImage systemImageNamed:@"chevron.left"];
+    cfg.imagePadding = 6;
+    cfg.baseForegroundColor = UIColor.whiteColor;
+    cfg.contentInsets = NSDirectionalEdgeInsetsMake(4, 0, 4, 0);
+    cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
+        NSMutableDictionary *m = [attrs mutableCopy];
+        m[NSFontAttributeName] = [UIFont boldSystemFontOfSize:18];
+        return m;
+    };
+    UIButton *back = [UIButton buttonWithConfiguration:cfg primaryAction:[UIAction actionWithHandler:^(UIAction *a) { [ws popSidePage]; }]];
+    back.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[back]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 8;
+    [stack setCustomSpacing:14 afterView:back];
+    return stack;
+}
+
+- (UILabel *)sideHint:(NSString *)text {
+    UILabel *l = [self sideSectionLabel:text];
+    l.font = [UIFont systemFontOfSize:12];
+    l.numberOfLines = 0;
+    return l;
+}
+
+- (void)buildSideSubPages {
+    UIStackView *combo = [self sideSubStack:@"快捷键"];
+    [self addComboSectionsToStack:combo];
+    _sidePages[@"combo"] = [self sideScrollPage:combo];
+
+    UIStackView *stats = [self sideSubStack:@"性能信息"];
+    _statsSegment = [[MLOptionGroup alloc] initWithItems:@[@"关", @"详细", @"原版"]];
+    [_statsSegment addTarget:self action:@selector(statsSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+    [stats addArrangedSubview:_statsSegment];
+    [stats setCustomSpacing:16 afterView:_statsSegment];
+    [stats addArrangedSubview:[self sideSectionLabel:@"显示项（详细模式，点选开关）"]];
+    [stats addArrangedSubview:[self statsItemGrid]];
+    [stats addArrangedSubview:[self sideHint:@"主菜单的「性能信息」按钮可一键开关；长按直接进这一页。"]];
+    _sidePages[@"stats"] = [self sideScrollPage:stats];
+
+    UIStackView *osc = [self sideSubStack:@"虚拟手柄"];
+    _oscSegment = [[MLOptionGroup alloc] initWithItems:@[@"关", @"简易", @"完整"]];
+    [_oscSegment addTarget:self action:@selector(oscSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+    [osc addArrangedSubview:_oscSegment];
+    [osc addArrangedSubview:[self sideHint:@"主菜单按钮在「关」和上次的档位之间切换。"]];
+    _sidePages[@"osc"] = [self sideScrollPage:osc];
+
+    UIStackView *touch = [self sideSubStack:@"鼠标与触控"];
+    _touchSegment = [[MLOptionGroup alloc] initWithItems:@[@"触控板", @"直接点击"]];
+    [_touchSegment addTarget:self action:@selector(touchSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+    [touch addArrangedSubview:_touchSegment];
+    [touch addArrangedSubview:[self sideHint:@"触控板：手指滑动移动光标，轻点为左键。\n直接点击：点哪里就点哪里。"]];
+    _sidePages[@"touch"] = [self sideScrollPage:touch];
+}
+
+- (void)installSidePage:(UIView *)p {
+    p.translatesAutoresizingMaskIntoConstraints = NO;
+    [_sidePageHost addSubview:p];
+    [NSLayoutConstraint activateConstraints:@[
+        [p.topAnchor constraintEqualToAnchor:_sidePageHost.topAnchor],
+        [p.bottomAnchor constraintEqualToAnchor:_sidePageHost.bottomAnchor],
+        [p.leadingAnchor constraintEqualToAnchor:_sidePageHost.leadingAnchor],
+        [p.trailingAnchor constraintEqualToAnchor:_sidePageHost.trailingAnchor],
+    ]];
+}
+
+- (void)pushSidePage:(NSString *)key {
+    UIView *p = _sidePages[key];
+    if (p == nil || p == _sideCurrentPage) {
+        return;
+    }
+    [self refreshSideTiles];
+    UIView *old = _sideCurrentPage;
+    _sideCurrentPage = p;
+    [self installSidePage:p];
+    CGFloat w = _sidePageHost.bounds.size.width;
+    p.transform = CGAffineTransformMakeTranslation(w, 0);
+    [UIView animateWithDuration:0.22 animations:^{
+        p.transform = CGAffineTransformIdentity;
+        old.transform = CGAffineTransformMakeTranslation(-w * 0.3, 0);
+        old.alpha = 0;
+    } completion:^(BOOL f) {
+        if (old != self->_sideCurrentPage) {
+            [old removeFromSuperview];
+        }
+        old.transform = CGAffineTransformIdentity;
+        old.alpha = 1;
+    }];
+}
+
+- (void)popSidePage {
+    if (_sideCurrentPage == _sideRootPage) {
+        return;
+    }
+    [self refreshSideTiles];
+    UIView *old = _sideCurrentPage;
+    UIView *root = _sideRootPage;
+    _sideCurrentPage = root;
+    [self installSidePage:root];
+    CGFloat w = _sidePageHost.bounds.size.width;
+    root.transform = CGAffineTransformMakeTranslation(-w * 0.3, 0);
+    root.alpha = 0;
+    [UIView animateWithDuration:0.22 animations:^{
+        root.transform = CGAffineTransformIdentity;
+        root.alpha = 1;
+        old.transform = CGAffineTransformMakeTranslation(w, 0);
+    } completion:^(BOOL f) {
+        if (old != self->_sideCurrentPage) {
+            [old removeFromSuperview];
+        }
+        old.transform = CGAffineTransformIdentity;
+    }];
+}
+
+- (void)setSideTile:(UIButton *)b on:(BOOL)on title:(NSString *)title {
+    UIButtonConfiguration *c = b.configuration;
+    c.background.backgroundColor = on ? [UIColor.systemGreenColor colorWithAlphaComponent:0.55] : [UIColor colorWithWhite:1 alpha:0.1];
+    if (title != nil) {
+        c.title = title;
+    }
+    b.configuration = c;
+}
+
+- (void)refreshSideTiles {
+    if (_statsTile == nil) {
+        return;
+    }
+    BOOL absTouch = [_streamView isAbsoluteTouchMode];
+    OnScreenControlsLevel lvl = [_streamView getCurrentOscState];
+    [self setSideTile:_statsTile on:_statsMode != 0 title:nil];
+    [self setSideTile:_oscTile on:lvl != OnScreenControlsLevelOff title:nil];
+    [self setSideTile:_touchTile on:NO title:absTouch ? @"直接点击" : @"触控板"];
+    _sideRowValues[@"stats"].text = @[@"关", @"详细", @"原版"][MIN(MAX(_statsMode, 0), 2)];
+    NSString *oscName = @"自动";
+    switch (lvl) {
+        case OnScreenControlsLevelOff: oscName = @"关"; break;
+        case OnScreenControlsLevelSimple: oscName = @"简易"; break;
+        case OnScreenControlsLevelFull: oscName = @"完整"; break;
+        default: break;
+    }
+    _sideRowValues[@"osc"].text = oscName;
+    _sideRowValues[@"touch"].text = absTouch ? @"直接点击" : @"触控板";
+    _sideRowValues[@"combo"].text = _customCombos.count ? [NSString stringWithFormat:@"%lu 个自定义", (unsigned long)_customCombos.count] : nil;
+    _statsSegment.selectedSegmentIndex = _statsMode;
+    _touchSegment.selectedSegmentIndex = absTouch ? 1 : 0;
+    [self syncOscSegment];
+}
+
+- (void)refreshSideClock {
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    f.dateFormat = @"HH:mm";
+    UIDevice *dev = UIDevice.currentDevice;
+    dev.batteryMonitoringEnabled = YES;
+    NSString *s = [f stringFromDate:[NSDate date]];
+    if (dev.batteryLevel >= 0) {
+        s = [s stringByAppendingFormat:@"  电量 %d%%", (int)lroundf(dev.batteryLevel * 100)];
+    }
+    _sideClockLabel.text = s;
+}
+
+- (void)statsTileTapped {
+    [self setStatsMode:_statsMode != 0 ? 0 : (_lastStatsMode != 0 ? _lastStatsMode : 1)];
+}
+
+- (void)statsTileLongPressed:(UILongPressGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [self pushSidePage:@"stats"];
+    }
+}
+
+- (void)oscTileTapped {
+    OnScreenControlsLevel cur = [_streamView getCurrentOscState];
+    if (cur != OnScreenControlsLevelOff) {
+        _lastOscLevel = cur;
+        [_streamView setOnScreenControlsLevel:OnScreenControlsLevelOff];
+    } else {
+        [_streamView setOnScreenControlsLevel:_lastOscLevel == OnScreenControlsLevelSimple ? OnScreenControlsLevelSimple : OnScreenControlsLevelFull];
+    }
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+    [self refreshSideTiles];
+}
+
+- (void)oscTileLongPressed:(UILongPressGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [self pushSidePage:@"osc"];
+    }
+}
+
+- (void)touchTileTapped {
+    [_streamView setAbsoluteTouchMode:![_streamView isAbsoluteTouchMode]];
+    [self refreshSideTiles];
+}
 
 - (void)addComboSectionsToStack:(UIStackView *)stack {
     [self addCustomComboSectionToStack:stack];
@@ -886,21 +1303,10 @@ static const CGFloat kSideHandleHeight = 64;
                 [stack addArrangedSubview:row];
                 [stack setCustomSpacing:6 afterView:row];
             }
-            UIButtonConfiguration *cfg = [UIButtonConfiguration grayButtonConfiguration];
-            cfg.title = items[i][0];
-            cfg.baseForegroundColor = UIColor.whiteColor;
-            cfg.contentInsets = NSDirectionalEdgeInsetsMake(8, 2, 8, 2);
-            cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
-                NSMutableDictionary *m = [attrs mutableCopy];
-                m[NSFontAttributeName] = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-                return m;
-            };
-            UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
-            b.titleLabel.adjustsFontSizeToFitWidth = YES;
+            UIButton *b = [self comboButton:items[i][0]];
             b.tag = all.count;
             [all addObject:items[i][1]];
             [b addTarget:self action:@selector(comboTapped:) forControlEvents:UIControlEventTouchUpInside];
-            [b.heightAnchor constraintEqualToConstant:40].active = YES;
             [row addArrangedSubview:b];
         }
         // pad the last row so buttons keep equal width
@@ -955,10 +1361,13 @@ static NSArray<NSNumber *> *parseComboSpec(NSString *spec) {
 }
 
 - (UIButton *)comboButton:(NSString *)title {
-    UIButtonConfiguration *cfg = [UIButtonConfiguration grayButtonConfiguration];
+    UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
     cfg.title = title;
     cfg.baseForegroundColor = UIColor.whiteColor;
     cfg.contentInsets = NSDirectionalEdgeInsetsMake(8, 2, 8, 2);
+    cfg.background.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
+    cfg.background.cornerRadius = 10;
+    cfg.titleLineBreakMode = NSLineBreakByTruncatingTail;
     cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
         NSMutableDictionary *m = [attrs mutableCopy];
         m[NSFontAttributeName] = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
@@ -966,7 +1375,7 @@ static NSArray<NSNumber *> *parseComboSpec(NSString *spec) {
     };
     UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
     b.titleLabel.adjustsFontSizeToFitWidth = YES;
-    [b.heightAnchor constraintEqualToConstant:40].active = YES;
+    [b.heightAnchor constraintEqualToConstant:42].active = YES;
     return b;
 }
 
@@ -1165,9 +1574,8 @@ static char modifierForVk(short vk) {
         return;
     }
     _sidePanelOpen = YES;
-    [self syncOscSegment];
-    _statsSegment.selectedSegmentIndex = _statsMode;
-    _touchSegment.selectedSegmentIndex = [_streamView isAbsoluteTouchMode] ? 1 : 0;
+    [self refreshSideTiles];
+    [self refreshSideClock];
     [self.view bringSubviewToFront:_sideDim];
     [self.view bringSubviewToFront:_sidePanel];
     _sideDim.hidden = NO;
@@ -1210,6 +1618,7 @@ static char modifierForVk(short vk) {
     }
     [_streamView setOnScreenControlsLevel:level];
     [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+    [self refreshSideTiles];
 }
 
 - (void)sideKeyboardTapped {
@@ -1285,10 +1694,15 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void) {
 
 - (void)touchSegmentChanged:(UISegmentedControl *)seg {
     [_streamView setAbsoluteTouchMode:seg.selectedSegmentIndex == 1];
+    [self refreshSideTiles];
 }
 
 - (void)setStatsMode:(NSInteger)mode {
     _statsMode = mode;
+    if (mode != 0) {
+        _lastStatsMode = mode;
+    }
+    [self refreshSideTiles];
     [_statsUpdateTimer invalidate];
     _statsUpdateTimer = nil;
     [_overlayView setHidden:YES];
