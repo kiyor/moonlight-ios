@@ -68,7 +68,8 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
         [_view.layer replaceSublayer:oldLayer with:displayLayer];
     }
     else {
-        [_view.layer addSublayer:displayLayer];
+        // Index 0 so a re-created renderer (in-stream quality change) stays under the on-screen controls
+        [_view.layer insertSublayer:displayLayer atIndex:0];
     }
     
     if (formatDesc != nil) {

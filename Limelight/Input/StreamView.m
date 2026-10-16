@@ -161,6 +161,10 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     }
 }
 
+- (void) setStreamAspectRatio:(float)ratio {
+    self->streamAspectRatio = ratio;
+}
+
 - (void) showOnScreenControls {
 #if !TARGET_OS_TV
     [onScreenControls show];

@@ -21,6 +21,7 @@
 
 #if TARGET_OS_TV
 #import <AVFoundation/AVDisplayCriteria.h>
+#import <AVFoundation/AVFoundation.h>
 #import <AVKit/AVDisplayManager.h>
 #import <AVKit/UIWindow.h>
 #endif
@@ -161,6 +162,10 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
     UIButton *_touchTile;
     NSInteger _lastStatsMode;
     OnScreenControlsLevel _lastOscLevel;
+    MLOptionGroup *_resGroup;
+    MLOptionGroup *_fpsGroup;
+    MLOptionGroup *_bitrateGroup;
+    BOOL _reconnecting;
 #endif
 }
 
@@ -510,6 +515,12 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
         
         [self->_controllerSupport connectionEstablished];
         
+        if (self->_reconnecting) {
+            // In-stream quality change: keep the user's current stats mode/timer
+            self->_reconnecting = NO;
+            return;
+        }
+        
         if (self->_settings.statsOverlay) {
 #if !TARGET_OS_TV
             self->_statsMode = 2;
@@ -525,6 +536,9 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
 
 - (void)connectionTerminated:(int)errorCode {
     Log(LOG_I, @"Connection terminated: %d", errorCode);
+    if (_reconnecting) {
+        return;
+    }
     
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
@@ -1014,25 +1028,26 @@ static const CGFloat kSideHandleHeight = 64;
     UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[title, _sideClockLabel]];
     header.alignment = UIStackViewAlignmentCenter;
 
-    UIButton *dc = [self sideTile:@"断开连接" symbol:@"xmark.circle" height:60 handler:^{ [ws sideDisconnectTapped]; }];
+    UIButton *dc = [self sideTile:@"断开" symbol:@"xmark.circle" height:60 handler:^{ [ws sideDisconnectTapped]; }];
     UIButtonConfiguration *dcfg = dc.configuration;
     dcfg.baseForegroundColor = UIColor.systemRedColor;
     dc.configuration = dcfg;
-    _statsTile = [self sideTile:@"性能信息" symbol:@"speedometer" height:60 handler:^{ [ws statsTileTapped]; }];
+    _statsTile = [self sideTile:@"性能" symbol:@"speedometer" height:60 handler:^{ [ws statsTileTapped]; }];
     [_statsTile addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(statsTileLongPressed:)]];
-    _oscTile = [self sideTile:@"虚拟手柄" symbol:@"gamecontroller" height:60 handler:^{ [ws oscTileTapped]; }];
+    _oscTile = [self sideTile:@"手柄" symbol:@"gamecontroller" height:60 handler:^{ [ws oscTileTapped]; }];
     [_oscTile addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(oscTileLongPressed:)]];
     _touchTile = [self sideTile:@"触控板" symbol:@"hand.point.up.left" height:60 handler:^{ [ws touchTileTapped]; }];
-    UIButton *explorer = [self sideTile:@"资源管理器" symbol:@"folder" height:60 handler:^{ [ws sendCombo:@[@VK_WIN, @0x45]]; }];
-    UIButton *taskmgr = [self sideTile:@"任务管理器" symbol:@"list.bullet.rectangle" height:60 handler:^{ [ws sendCombo:@[@VK_CTRL, @VK_SHIFT, @0x1B]]; }];
+    UIButton *explorer = [self sideTile:@"资源管理" symbol:@"folder" height:60 handler:^{ [ws sendCombo:@[@VK_WIN, @0x45]]; }];
+    UIButton *taskmgr = [self sideTile:@"任务管理" symbol:@"list.bullet.rectangle" height:60 handler:^{ [ws sendCombo:@[@VK_CTRL, @VK_SHIFT, @0x1B]]; }];
     UIButton *shot = [self sideTile:@"截图" symbol:@"camera.viewfinder" height:60 handler:^{ [ws sendCombo:@[@VK_WIN, @VK_SHIFT, @0x53]]; }];
     UIButton *esc = [self sideTile:@"Esc" symbol:@"escape" height:60 handler:^{ [ws sendCombo:@[@0x1B]]; }];
 
     UIStackView *rows = [[UIStackView alloc] initWithArrangedSubviews:@[
+        [self sideNavRow:@"画质" symbol:@"sparkles.tv" page:@"quality"],
         [self sideNavRow:@"快捷键" symbol:@"command" page:@"combo"],
         [self sideNavRow:@"性能信息" symbol:@"speedometer" page:@"stats"],
         [self sideNavRow:@"虚拟手柄" symbol:@"gamecontroller" page:@"osc"],
-        [self sideNavRow:@"鼠标与触控" symbol:@"cursorarrow.motionlines" page:@"touch"],
+        [self sideNavRow:@"触控模式" symbol:@"cursorarrow.motionlines" page:@"touch"],
     ]];
     rows.axis = UILayoutConstraintAxisVertical;
     rows.spacing = 6;
@@ -1101,12 +1116,121 @@ static const CGFloat kSideHandleHeight = 64;
     [osc addArrangedSubview:[self sideHint:@"主菜单按钮在「关」和上次的档位之间切换。"]];
     _sidePages[@"osc"] = [self sideScrollPage:osc];
 
-    UIStackView *touch = [self sideSubStack:@"鼠标与触控"];
+    UIStackView *touch = [self sideSubStack:@"触控模式"];
     _touchSegment = [[MLOptionGroup alloc] initWithItems:@[@"触控板", @"直接点击"]];
     [_touchSegment addTarget:self action:@selector(touchSegmentChanged:) forControlEvents:UIControlEventValueChanged];
     [touch addArrangedSubview:_touchSegment];
     [touch addArrangedSubview:[self sideHint:@"触控板：手指滑动移动光标，轻点为左键。\n直接点击：点哪里就点哪里。"]];
     _sidePages[@"touch"] = [self sideScrollPage:touch];
+
+    __weak typeof(self) ws = self;
+    UIStackView *q = [self sideSubStack:@"画质"];
+    [q addArrangedSubview:[self sideSectionLabel:@"分辨率"]];
+    _resGroup = [[MLOptionGroup alloc] initWithItems:@[@"720p", @"1080p", @"1440p", @"4K", @"本机"]];
+    [q addArrangedSubview:_resGroup];
+    [q setCustomSpacing:14 afterView:_resGroup];
+    [q addArrangedSubview:[self sideSectionLabel:@"帧率"]];
+    _fpsGroup = [[MLOptionGroup alloc] initWithItems:@[@"30", @"60", @"90", @"120"]];
+    [q addArrangedSubview:_fpsGroup];
+    [q setCustomSpacing:14 afterView:_fpsGroup];
+    [q addArrangedSubview:[self sideSectionLabel:@"码率 (Mbps)"]];
+    _bitrateGroup = [[MLOptionGroup alloc] initWithItems:@[@"5", @"10", @"20", @"30", @"50", @"80"]];
+    [q addArrangedSubview:_bitrateGroup];
+    [q setCustomSpacing:18 afterView:_bitrateGroup];
+    UIButton *apply = [self sideTile:@"应用并重连" symbol:@"arrow.triangle.2.circlepath" height:56 handler:^{ [ws applyQualityTapped]; }];
+    UIButtonConfiguration *ac = apply.configuration;
+    ac.background.backgroundColor = [UIColor.systemGreenColor colorWithAlphaComponent:0.55];
+    apply.configuration = ac;
+    [q addArrangedSubview:apply];
+    [q addArrangedSubview:[self sideHint:@"点「应用」后画面断开约 2 秒，用新参数重连，游戏不受影响。只改本次串流，不改默认设置。"]];
+    _sidePages[@"quality"] = [self sideScrollPage:q];
+}
+
+static NSArray<NSArray<NSNumber *> *> *qualityResDefs(void) {
+    return @[@[@1280, @720], @[@1920, @1080], @[@2560, @1440], @[@3840, @2160], @[@0, @0]];
+}
+static NSArray<NSNumber *> *qualityFpsDefs(void) { return @[@30, @60, @90, @120]; }
+static NSArray<NSNumber *> *qualityBitrateDefs(void) { return @[@5, @10, @20, @30, @50, @80]; }
+
+- (CGSize)nativeStreamSize {
+    CGSize n = UIScreen.mainScreen.nativeBounds.size;
+    int w = ((int)MAX(n.width, n.height)) & ~1;
+    int h = ((int)MIN(n.width, n.height)) & ~1;
+    return CGSizeMake(w, h);
+}
+
+- (void)syncQualityGroups {
+    StreamConfiguration *c = self.streamConfig;
+    NSInteger ri = -1;
+    NSArray *res = qualityResDefs();
+    CGSize native = [self nativeStreamSize];
+    for (NSInteger i = 0; i < (NSInteger)res.count; i++) {
+        int w = [res[i][0] intValue], h = [res[i][1] intValue];
+        if (w == 0) { w = native.width; h = native.height; }
+        if (w == c.width && h == c.height) { ri = i; break; }
+    }
+    _resGroup.selectedSegmentIndex = ri;
+    _fpsGroup.selectedSegmentIndex = [qualityFpsDefs() indexOfObject:@(c.frameRate)] == NSNotFound ? -1 : [qualityFpsDefs() indexOfObject:@(c.frameRate)];
+    NSUInteger bi = [qualityBitrateDefs() indexOfObject:@(c.bitRate / 1000)];
+    _bitrateGroup.selectedSegmentIndex = bi == NSNotFound ? -1 : bi;
+}
+
+- (NSString *)qualitySummary {
+    StreamConfiguration *c = self.streamConfig;
+    return [NSString stringWithFormat:@"%dp · %d · %dM", c.height, c.frameRate, c.bitRate / 1000];
+}
+
+- (void)applyQualityTapped {
+    StreamConfiguration *c = self.streamConfig;
+    int w = c.width, h = c.height, fps = c.frameRate, kbps = c.bitRate;
+    if (_resGroup.selectedSegmentIndex >= 0) {
+        NSArray *r = qualityResDefs()[_resGroup.selectedSegmentIndex];
+        w = [r[0] intValue]; h = [r[1] intValue];
+        if (w == 0) { CGSize n = [self nativeStreamSize]; w = n.width; h = n.height; }
+    }
+    if (_fpsGroup.selectedSegmentIndex >= 0) {
+        fps = [qualityFpsDefs()[_fpsGroup.selectedSegmentIndex] intValue];
+    }
+    if (_bitrateGroup.selectedSegmentIndex >= 0) {
+        kbps = [qualityBitrateDefs()[_bitrateGroup.selectedSegmentIndex] intValue] * 1000;
+    }
+    if (w == c.width && h == c.height && fps == c.frameRate && kbps == c.bitRate) {
+        [self closeSidePanel];
+        return;
+    }
+    c.width = w;
+    c.height = h;
+    c.frameRate = fps;
+    c.bitRate = kbps;
+    [self closeSidePanel];
+    [self restartStreamWithCurrentConfig];
+}
+
+- (void)restartStreamWithCurrentConfig {
+    _reconnecting = YES;
+    [_streamMan stopStream];
+    // Old renderer's layer would sit on top of the new one; drop it now
+    for (CALayer *l in [_streamView.layer.sublayers copy]) {
+        if ([l isKindOfClass:[AVSampleBufferDisplayLayer class]]) {
+            [l removeFromSuperlayer];
+        }
+    }
+    [_streamView setStreamAspectRatio:(float)self.streamConfig.width / (float)self.streamConfig.height];
+    _stageLabel.text = @"正在用新画质重连…";
+    [_stageLabel sizeToFit];
+    _stageLabel.center = CGPointMake(self.view.bounds.size.width / 2, self.view.bounds.size.height / 2 + 50);
+    _stageLabel.hidden = NO;
+    [self.view bringSubviewToFront:_stageLabel];
+    [self.view bringSubviewToFront:_spinner];
+    [_spinner startAnimating];
+    // Give LiStopConnection (async, under initLock) a head start so the host tears the old session down first
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        self->_streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
+                                                      renderView:self->_streamView
+                                             connectionCallbacks:self];
+        NSOperationQueue *q = [[NSOperationQueue alloc] init];
+        [q addOperation:self->_streamMan];
+    });
 }
 
 - (void)installSidePage:(UIView *)p {
@@ -1196,6 +1320,8 @@ static const CGFloat kSideHandleHeight = 64;
     }
     _sideRowValues[@"osc"].text = oscName;
     _sideRowValues[@"touch"].text = absTouch ? @"直接点击" : @"触控板";
+    _sideRowValues[@"quality"].text = [self qualitySummary];
+    [self syncQualityGroups];
     _sideRowValues[@"combo"].text = _customCombos.count ? [NSString stringWithFormat:@"%lu 个自定义", (unsigned long)_customCombos.count] : nil;
     _statsSegment.selectedSegmentIndex = _statsMode;
     _touchSegment.selectedSegmentIndex = absTouch ? 1 : 0;

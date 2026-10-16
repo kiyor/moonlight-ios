@@ -29,6 +29,7 @@
                   config:(StreamConfiguration*)streamConfig;
 - (void) showOnScreenControls;
 - (OnScreenControlsLevel) getCurrentOscState;
+- (void) setStreamAspectRatio:(float)ratio;
 
 #if !TARGET_OS_TV
 - (void) setOnScreenControlsLevel:(OnScreenControlsLevel)level;
