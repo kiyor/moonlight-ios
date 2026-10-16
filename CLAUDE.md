@@ -20,6 +20,8 @@
 - 解码耗时（VT 自解码，fee4153 可切回「原版直出」）：画面/HDR/后台回来是否正常
 - 画质页重连、回前台自动重连：比例、点触位置、手柄/浮层是否还在
 - 虚拟鼠标按键、手柄当鼠标、自定义按键布局（编辑/拖动/删除/WASD 摇杆）
+- 竖屏：画质页切「竖屏/跟随手机」后画面贴顶、快捷键栏、触点是否对准、退出串流主页回横屏
+- 外接显示器：HDMI 转接头/AirPlay 镜像时画面是否上外屏、手机触控是否还能用、拔线回手机
 
 ## 阿西西特色功能移植队列（按性价比排序，做完打 ✅）
 | # | 功能 | 成本 | 备注 |
@@ -33,8 +35,8 @@
 | ✅7 | 后台回前台自动重连 | 中 | f6bf033；画质页开关，默认开 |
 | ✅8 | 音频震动 | 中 | 18198a8；低通取低音电平驱动 UIImpactFeedback，手柄页开关，默认关 |
 | ✅9 | 竖屏串流 + 竖屏快捷键栏 | 中 | cd0f23b；画质页「屏幕方向」横屏/跟随/竖屏（`moonlight.orientation`，默认横屏）。根控制器 SWRevealViewController 只对串流页放开竖屏；视频矩形统一由 `StreamView videoRect`（竖屏贴顶）给渲染层和触控映射；旋转时重排 OSC（下半屏）、按键浮层、虚拟鼠标；竖屏视频下方横滑快捷键栏 |
-| 10 | 外接显示器输出 | 中 | UIScene 外屏 |
-| 11 | FSR 超分（Metal 移植 GLSL） | 高 | 渲染要从 AVSampleBufferDisplayLayer 改 Metal |
-| 12 | 麦克风上行 | 高 | 依赖阿西西版 Sunshine 协议扩展 |
-| 13 | SBS 3D / AR 眼镜 | 高 | 小众 |
+| ✅10 | 外接显示器输出 | 中 | 56eac96；Info.plist 加 `UIWindowSceneSessionRoleExternalDisplayNonInteractive` → `ExternalSceneDelegate`（AppDelegate.m）建黑窗口，`MLSetExternalVideoView` 通知渲染器把显示层挪过去（等比居中）并请求 IDR；手机留作触控板/手柄。拔线自动挪回 |
+| 11 | FSR 超分（Metal 移植 GLSL） | 高 | 评估：安卓 `fsr/FsrVideoProcessor.java`(950 行)+`assets/fsr/2.0/*.glsl`(EASU 447 + RCAS 211 行)。iOS 前提已有一半——VT 自解码路径拿得到 CVPixelBuffer，可接 CVMetalTextureCache→EASU/RCAS 两 pass→CAMetalLayer，替掉 AVSampleBufferDisplayLayer（HDR/帧同步要自己管）。约 2-3 天；收益仅在低码率/低分辨率串流明显，手机屏小，优先级低 |
+| 12 | 麦克风上行 | 高 | 评估：卡在主机端。协议=HTTPS `/mic-uplink?uniqueid=` 拿 `axiMicEnabled/axiMicPort/axiMicSessionId/axiMicToken/axiMicCodec`，再 UDP 发 Opus 包（头：sessionId,seq,timestamp,token,payloadType=1,0,len）。**52 是官方 Sunshine（serverinfo 无 axi 字段）**，要先在主机换阿西西版 Sunshine 才能测；iOS 侧 AVAudioEngine+Opus 编码约 1 天 |
+| 13 | SBS 3D / AR 眼镜 | 高 | 评估：安卓 `assets/stereo/*.glsl` 把画面左右复制/半宽拼接给 AR 眼镜。iOS 上 AR 眼镜走外接显示器（#10 已通），SBS 只需在外屏放两个显示层或一个 Metal pass；和 #11 共用 Metal 渲染管线时顺手做，单独做不值 |
 | — | USB 手柄驱动 | 不做 | iOS GameController 原生支持 DS4/DS5/Pro |
