@@ -555,7 +555,20 @@ static char modifierForVk(short vk);
     [_statsUpdateTimer invalidate];
     _statsUpdateTimer = nil;
     
+    UIWindow *win = self.view.window;
     [self.navigationController popToRootViewControllerAnimated:YES];
+#if !TARGET_OS_TV
+    // Home page is landscape-only; rotate back if we streamed in portrait
+    if (win != nil && win.bounds.size.height > win.bounds.size.width) {
+        if (@available(iOS 16.0, *)) {
+            [win.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
+            UIWindowSceneGeometryPreferencesIOS *p = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:UIInterfaceOrientationMaskLandscape];
+            [win.windowScene requestGeometryUpdateWithPreferences:p errorHandler:nil];
+        } else {
+            [UIViewController attemptRotationToDeviceOrientation];
+        }
+    }
+#endif
 }
 
 // This will fire if the user opens control center or gets a low battery message
