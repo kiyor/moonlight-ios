@@ -5,3 +5,5 @@
 Build
 DerivedData
 build/
+scripts/local.env
+CLAUDE.md
