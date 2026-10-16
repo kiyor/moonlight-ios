@@ -32,7 +32,7 @@
 | ✅6 | 手柄键鼠模式（手柄摇杆当鼠标） | 中 | ca124c3；左摇杆光标、右摇杆滚轮、A/B/X 三键 |
 | ✅7 | 后台回前台自动重连 | 中 | f6bf033；画质页开关，默认开 |
 | ✅8 | 音频震动 | 中 | 18198a8；低通取低音电平驱动 UIImpactFeedback，手柄页开关，默认关 |
-| 9 | 竖屏串流 + 竖屏快捷键栏 | 中 | |
+| 9 | 竖屏串流 + 竖屏快捷键栏 | 中 | 进行中。现场：Info.plist:90 只有 Landscape；StreamFrameVC `shouldAutorotate`≈2409 无 supportedInterfaceOrientations；串流页由 storyboard segue 推入（MainFrameVC:890），方向要经 nav controller（需 delegate `navigationControllerSupportedInterfaceOrientations` 或子类）；渲染层尺寸只在 VideoDecoderRenderer.m:154 init 算一次，旋转需在 viewDidLayoutSubviews(≈2166) 重算；StreamView 宽高比用于触控映射 |
 | 10 | 外接显示器输出 | 中 | UIScene 外屏 |
 | 11 | FSR 超分（Metal 移植 GLSL） | 高 | 渲染要从 AVSampleBufferDisplayLayer 改 Metal |
 | 12 | 麦克风上行 | 高 | 依赖阿西西版 Sunshine 协议扩展 |
