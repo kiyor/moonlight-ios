@@ -171,6 +171,7 @@
     d[@"host"] = stats.framesWithHostProcessingLatency ? [NSString stringWithFormat:@"%.1f ms", (float)stats.totalHostProcessingLatency / stats.framesWithHostProcessingLatency / 10.f] : @"--";
     d[@"recv"] = stats.receivedFrames ? [NSString stringWithFormat:@"%.1f ms", stats.totalReceiveUs / (double)stats.receivedFrames / 1000.0] : @"--";
     d[@"queue"] = stats.receivedFrames ? [NSString stringWithFormat:@"%.1f ms", stats.totalQueueUs / (double)stats.receivedFrames / 1000.0] : @"--";
+    d[@"decode"] = stats.decodedFrames ? [NSString stringWithFormat:@"%.1f ms", stats.totalDecodeUs / (double)stats.decodedFrames / 1000.0] : @"--";
     d[@"bitrate"] = interval > 0 ? [NSString stringWithFormat:@"%.1f Mbps", stats.totalBytes * 8.0 / interval / 1e6] : @"--";
     return d;
 }

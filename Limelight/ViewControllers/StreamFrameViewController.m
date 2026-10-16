@@ -1779,12 +1779,20 @@ static NSString *const kStatsItemsKey = @"moonlight.statsItems";
 static NSArray<NSArray<NSString *> *> *statsItemDefs(void) {
     return @[@[@"res", @"分辨率"], @[@"fps", @"帧率"], @[@"codec", @"编码"],
              @[@"bitrate", @"码率"], @[@"net", @"网络延迟"], @[@"loss", @"丢帧"],
-             @[@"recv", @"接收耗时"], @[@"queue", @"解码排队"], @[@"host", @"主机处理"]];
+             @[@"recv", @"接收耗时"], @[@"queue", @"等待解码"], @[@"decode", @"解码耗时"],
+             @[@"host", @"主机处理"]];
 }
 
 - (UIStackView *)statsItemGrid {
     NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:kStatsItemsKey];
-    _statsItemsOn = [NSMutableSet setWithArray:saved ?: @[@"res", @"fps", @"net", @"loss", @"bitrate"]];
+    _statsItemsOn = [NSMutableSet setWithArray:saved ?: @[@"res", @"fps", @"net", @"loss", @"bitrate", @"decode"]];
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (saved != nil && ![ud boolForKey:@"moonlight.statsDecodeAdded"]) {
+        // One-time: turn the new decode-time item on for users who saved a selection before it existed
+        [_statsItemsOn addObject:@"decode"];
+        [ud setObject:_statsItemsOn.allObjects forKey:kStatsItemsKey];
+    }
+    [ud setBool:YES forKey:@"moonlight.statsDecodeAdded"];
     _statsItemButtons = [NSMutableArray array];
     UIStackView *grid = [[UIStackView alloc] init];
     grid.axis = UILayoutConstraintAxisVertical;

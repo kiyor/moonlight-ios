@@ -24,7 +24,12 @@ typedef struct {
     uint64_t totalReceiveUs;
     uint64_t totalQueueUs;
     int64_t totalBytes;
+    uint64_t totalDecodeUs;
+    uint32_t decodedFrames;
 } video_stats_t;
+
+// Called from the VideoToolbox output callback (any thread) with one frame's decode time
+void MLRecordDecodeTime(uint64_t us);
 
 @interface Connection : NSOperation <NSStreamDelegate>
 

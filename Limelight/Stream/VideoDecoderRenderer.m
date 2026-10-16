@@ -8,6 +8,8 @@
 
 #import "VideoDecoderRenderer.h"
 #import "StreamView.h"
+#import "Connection.h"
+#import <VideoToolbox/VideoToolbox.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavcodec/cbs.h>
@@ -35,6 +37,77 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     
     CADisplayLink* _displayLink;
     BOOL framePacing;
+    VTDecompressionSessionRef _vtSession;
+    BOOL _vtDisabled;
+}
+
+static void MLDecompressionOutput(void *refCon, void *frameRefCon, OSStatus status, VTDecodeInfoFlags flags,
+                                  CVImageBufferRef imageBuffer, CMTime pts, CMTime duration) {
+    VideoDecoderRenderer *renderer = (__bridge VideoDecoderRenderer *)refCon;
+    if (status != noErr || imageBuffer == NULL) {
+        if (status != noErr) {
+            Log(LOG_W, @"VideoToolbox decode failed: %d", (int)status);
+            LiRequestIdrFrame();
+        }
+        return;
+    }
+    uint64_t start = (uint64_t)(uintptr_t)frameRefCon;
+    uint64_t now = LiGetMicroseconds();
+    if (now >= start) {
+        MLRecordDecodeTime(now - start);
+    }
+    [renderer enqueueDecodedImage:imageBuffer pts:pts];
+}
+
+- (void)enqueueDecodedImage:(CVImageBufferRef)img pts:(CMTime)pts {
+    CMVideoFormatDescriptionRef fd = NULL;
+    if (CMVideoFormatDescriptionCreateForImageBuffer(NULL, img, &fd) != noErr) {
+        return;
+    }
+    CMSampleTimingInfo t = {kCMTimeInvalid, pts, kCMTimeInvalid};
+    CMSampleBufferRef sb = NULL;
+    OSStatus s = CMSampleBufferCreateReadyWithImageBuffer(NULL, img, fd, &t, &sb);
+    CFRelease(fd);
+    if (s != noErr) {
+        return;
+    }
+    [displayLayer enqueueSampleBuffer:sb];
+    CFRelease(sb);
+}
+
+- (void)resetDecompressionSession {
+    if (_vtSession != NULL) {
+        VTDecompressionSessionInvalidate(_vtSession);
+        CFRelease(_vtSession);
+        _vtSession = NULL;
+    }
+}
+
+// Decode ourselves with VideoToolbox (instead of handing compressed frames to the layer)
+// so we can measure per-frame decode time. Falls back to layer decoding if VT refuses.
+- (BOOL)ensureDecompressionSession {
+    if (_vtSession != NULL && VTDecompressionSessionCanAcceptFormatDescription(_vtSession, formatDesc)) {
+        return YES;
+    }
+    [self resetDecompressionSession];
+    if (_vtDisabled) {
+        return NO;
+    }
+    VTDecompressionOutputCallbackRecord cb = {MLDecompressionOutput, (__bridge void *)self};
+    NSDictionary *attrs = @{(id)kCVPixelBufferIOSurfacePropertiesKey: @{}};
+    OSStatus s = VTDecompressionSessionCreate(NULL, formatDesc, NULL, (__bridge CFDictionaryRef)attrs, &cb, &_vtSession);
+    if (s != noErr) {
+        Log(LOG_W, @"VTDecompressionSessionCreate failed: %d, falling back to layer decode", (int)s);
+        _vtSession = NULL;
+        _vtDisabled = YES;
+        return NO;
+    }
+    VTSessionSetProperty(_vtSession, kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
+    return YES;
+}
+
+- (void)dealloc {
+    [self resetDecompressionSession];
 }
 
 - (void)reinitializeDisplayLayer
@@ -595,8 +668,23 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
         return DR_NEED_IDR;
     }
 
-    // Enqueue the next frame
-    [self->displayLayer enqueueSampleBuffer:sampleBuffer];
+    // Decode (async, VideoToolbox) or let the layer decode as before
+    if ([self ensureDecompressionSession]) {
+        OSStatus ds = VTDecompressionSessionDecodeFrame(_vtSession, sampleBuffer, kVTDecodeFrame_EnableAsynchronousDecompression,
+                                                        (void *)(uintptr_t)LiGetMicroseconds(), NULL);
+        if (ds != noErr) {
+            // e.g. kVTInvalidSessionErr after returning from background
+            Log(LOG_W, @"VTDecompressionSessionDecodeFrame failed: %d", (int)ds);
+            [self resetDecompressionSession];
+            CFRelease(dataBlockBuffer);
+            CFRelease(frameBlockBuffer);
+            CFRelease(sampleBuffer);
+            return DR_NEED_IDR;
+        }
+    }
+    else {
+        [self->displayLayer enqueueSampleBuffer:sampleBuffer];
+    }
     
     if (du->frameType == FRAME_TYPE_IDR) {
         // Ensure the layer is visible now

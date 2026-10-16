@@ -16,6 +16,7 @@
 
 #include "Limelight.h"
 #include "opus_multistream.h"
+#include <stdatomic.h>
 
 @implementation Connection {
     SERVER_INFORMATION _serverInfo;
@@ -37,6 +38,13 @@ static int activeVideoFormat;
 static video_stats_t currentVideoStats;
 static video_stats_t lastVideoStats;
 static NSLock* videoStatsLock;
+static _Atomic uint64_t gDecodeUs;
+static _Atomic uint32_t gDecodeFrames;
+
+void MLRecordDecodeTime(uint64_t us) {
+    atomic_fetch_add(&gDecodeUs, us);
+    atomic_fetch_add(&gDecodeFrames, 1);
+}
 
 static SDL_AudioDeviceID audioDevice;
 static OPUS_MULTISTREAM_CONFIGURATION audioConfig;
@@ -148,6 +156,8 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
         // Flip stats roughly every second
         if (now - currentVideoStats.startTime >= 1.0f) {
             currentVideoStats.endTime = now;
+            currentVideoStats.totalDecodeUs = atomic_exchange(&gDecodeUs, 0);
+            currentVideoStats.decodedFrames = atomic_exchange(&gDecodeFrames, 0);
             
             [videoStatsLock lock];
             lastVideoStats = currentVideoStats;
