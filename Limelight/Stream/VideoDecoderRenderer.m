@@ -145,14 +145,11 @@ void MLSetUseVTDecode(BOOL on) {
     // respects the PAR encoded in the SPS which causes our computed video-relative
     // touch location to be wrong in StreamView if the aspect ratio of the host
     // desktop doesn't match the aspect ratio of the stream.
-    CGSize videoSize;
-    if (_view.bounds.size.width > _view.bounds.size.height * _streamAspectRatio) {
-        videoSize = CGSizeMake(_view.bounds.size.height * _streamAspectRatio, _view.bounds.size.height);
-    } else {
-        videoSize = CGSizeMake(_view.bounds.size.width, _view.bounds.size.width / _streamAspectRatio);
-    }
-    displayLayer.position = CGPointMake(CGRectGetMidX(_view.bounds), CGRectGetMidY(_view.bounds));
-    displayLayer.bounds = CGRectMake(0, 0, videoSize.width, videoSize.height);
+    // StreamView owns the video rect (top-aligned in portrait) and re-applies it on rotation
+    [_view setStreamAspectRatio:_streamAspectRatio];
+    CGRect vr = [_view videoRect];
+    displayLayer.position = CGPointMake(CGRectGetMidX(vr), CGRectGetMidY(vr));
+    displayLayer.bounds = CGRectMake(0, 0, vr.size.width, vr.size.height);
     displayLayer.videoGravity = AVLayerVideoGravityResize;
 
     // Hide the layer until we get an IDR frame. This ensures we

@@ -32,5 +32,7 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 - (void) setLevel:(OnScreenControlsLevel)level;
 - (OnScreenControlsLevel) getLevel;
 - (void) show;
+// Recompute the control area from the view's current size (after rotation) and redraw
+- (void) relayout;
 
 @end

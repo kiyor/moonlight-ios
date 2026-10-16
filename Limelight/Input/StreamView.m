@@ -7,6 +7,7 @@
 //
 
 #import "StreamView.h"
+@import AVFoundation;
 #include <Limelight.h>
 #import "DataManager.h"
 #import "ControllerSupport.h"
@@ -44,6 +45,39 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     BOOL hasUserInteracted;
     
     NSDictionary<NSString *, NSNumber *> *dictCodes;
+    CGSize lastLayoutSize;
+}
+
+- (CGRect) videoRect {
+    CGSize videoSize = [self getVideoAreaSize];
+    CGFloat x = self.bounds.size.width / 2 - videoSize.width / 2;
+    CGFloat y = self.bounds.size.height / 2 - videoSize.height / 2;
+    if (self.bounds.size.height > self.bounds.size.width) {
+        // Portrait: pin video under the notch, leaving the lower area for controls
+        y = MIN(y, self.safeAreaInsets.top);
+    }
+    return CGRectMake(x, y, videoSize.width, videoSize.height);
+}
+
+- (void) layoutSubviews {
+    [super layoutSubviews];
+    if (CGSizeEqualToSize(lastLayoutSize, self.bounds.size)) {
+        return;
+    }
+    lastLayoutSize = self.bounds.size;
+    CGRect vr = [self videoRect];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (CALayer *l in self.layer.sublayers) {
+        if ([l isKindOfClass:[AVSampleBufferDisplayLayer class]]) {
+            l.bounds = CGRectMake(0, 0, vr.size.width, vr.size.height);
+            l.position = CGPointMake(CGRectGetMidX(vr), CGRectGetMidY(vr));
+        }
+    }
+    [CATransaction commit];
+#if !TARGET_OS_TV
+    [onScreenControls relayout];
+#endif
 }
 
 - (void) setupStreamView:(ControllerSupport*)controllerSupport
@@ -163,6 +197,8 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
 - (void) setStreamAspectRatio:(float)ratio {
     self->streamAspectRatio = ratio;
+    lastLayoutSize = CGSizeZero;
+    [self setNeedsLayout];
 }
 
 - (void) showOnScreenControls {
@@ -236,8 +272,7 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     
     // This logic mimics what iOS does with AVLayerVideoGravityResizeAspect
     CGSize videoSize = [self getVideoAreaSize];
-    CGPoint videoOrigin = CGPointMake(self.bounds.size.width / 2 - videoSize.width / 2,
-                                      self.bounds.size.height / 2 - videoSize.height / 2);
+    CGPoint videoOrigin = [self videoRect].origin;
     
     // Confine the cursor to the video region. We don't just discard events outside
     // the region because we won't always get one exactly when the mouse leaves the region.
@@ -702,8 +737,7 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     } else {
         videoSize = CGSizeMake(self.bounds.size.width, self.bounds.size.width / streamAspectRatio);
     }
-    videoOrigin = CGPointMake(self.bounds.size.width / 2 - videoSize.width / 2,
-                              self.bounds.size.height / 2 - videoSize.height / 2);
+    videoOrigin = [self videoRect].origin;
     
     // Move the cursor on the host if no buttons are pressed.
     // Motion with buttons pressed in handled in touchesMoved:

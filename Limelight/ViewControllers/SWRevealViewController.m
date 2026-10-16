@@ -656,6 +656,20 @@ const int FrontViewPositionNone = 0xff;
 
 #pragma mark - StatusBar
 
+#pragma mark - Orientation (moonlight: only the stream page may go portrait)
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations
+{
+    UIViewController *c = _frontViewController;
+    if ([c isKindOfClass:[UINavigationController class]]) {
+        c = ((UINavigationController *)c).topViewController;
+    }
+    if (c != nil && [c isKindOfClass:NSClassFromString(@"StreamFrameViewController")]) {
+        return c.supportedInterfaceOrientations;
+    }
+    return UIInterfaceOrientationMaskLandscape;
+}
+
 - (UIViewController *)childViewControllerForStatusBarStyle
 {
     int positionDif =  _frontViewPosition - FrontViewPositionLeft;

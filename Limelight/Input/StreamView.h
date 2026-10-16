@@ -30,6 +30,8 @@
 - (void) showOnScreenControls;
 - (OnScreenControlsLevel) getCurrentOscState;
 - (void) setStreamAspectRatio:(float)ratio;
+// Where the video is drawn inside this view: centered in landscape, top-aligned in portrait
+- (CGRect) videoRect;
 
 #if !TARGET_OS_TV
 - (void) setOnScreenControlsLevel:(OnScreenControlsLevel)level;

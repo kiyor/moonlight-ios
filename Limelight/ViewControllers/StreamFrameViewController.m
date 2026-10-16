@@ -271,6 +271,8 @@ static char modifierForVk(short vk);
     NSMutableArray<NSDictionary *> *_keyLayout;
     BOOL _keysVisible;
     BOOL _keysEditing;
+    UIScrollView *_portraitBar;
+    CGSize _lastLayoutSize;
 #endif
 }
 
@@ -1476,6 +1478,20 @@ static const CGFloat kSideHandleHeight = 64;
     }] forControlEvents:UIControlEventValueChanged];
     [q addArrangedSubview:ar];
     [q addArrangedSubview:[self sideHint:@"iOS 不允许后台保持串流。自动重连：切回来后停在串流页直接重连，主机游戏继续。"]];
+    [q setCustomSpacing:18 afterView:q.arrangedSubviews.lastObject];
+    [q addArrangedSubview:[self sideSectionLabel:@"屏幕方向"]];
+    MLOptionGroup *ori = [[MLOptionGroup alloc] initWithItems:@[@"横屏", @"跟随手机", @"竖屏"]];
+    ori.selectedSegmentIndex = [self orientationPref];
+    [ori addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        typeof(self) ss = ws;
+        if (!ss) return;
+        NSInteger idx = ((MLOptionGroup *)a.sender).selectedSegmentIndex;
+        [[NSUserDefaults standardUserDefaults] setInteger:idx forKey:@"moonlight.orientation"];
+        [ss closeSidePanel];
+        [ss applyOrientationMask:[ss supportedInterfaceOrientations]];
+    }] forControlEvents:UIControlEventValueChanged];
+    [q addArrangedSubview:ori];
+    [q addArrangedSubview:[self sideHint:@"竖屏时画面贴顶，下方出现快捷键栏（左右滑动），虚拟手柄放在下半屏。不需要重连。"]];
     _sidePages[@"quality"] = [self sideScrollPage:q];
 }
 
@@ -2169,10 +2185,127 @@ static char modifierForVk(short vk) {
         return;
     }
     CGSize s = self.view.bounds.size;
+    if (!CGSizeEqualToSize(s, _lastLayoutSize)) {
+        _lastLayoutSize = s;
+        [self relayoutForSize:s];
+    }
     CGFloat pw = [self sidePanelWidth];
     _sideHandle.frame = CGRectMake(s.width - kSideHandleWidth, (s.height - kSideHandleHeight) / 2, kSideHandleWidth, kSideHandleHeight);
     _sideDim.frame = self.view.bounds;
     _sidePanel.frame = CGRectMake(_sidePanelOpen ? s.width - pw : s.width, 0, pw, s.height);
+}
+
+#pragma mark - 竖屏
+
+// 0 = 横屏（默认，和原版一致） 1 = 跟随手机方向 2 = 锁竖屏
+- (NSInteger)orientationPref {
+    return [[NSUserDefaults standardUserDefaults] integerForKey:@"moonlight.orientation"];
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    switch ([self orientationPref]) {
+        case 1: return UIInterfaceOrientationMaskAllButUpsideDown;
+        case 2: return UIInterfaceOrientationMaskPortrait;
+        default: return UIInterfaceOrientationMaskLandscape;
+    }
+}
+
+- (void)applyOrientationMask:(UIInterfaceOrientationMask)mask {
+    if (@available(iOS 16.0, *)) {
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+        [self.view.window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
+        UIWindowScene *ws = self.view.window.windowScene;
+        if (ws != nil) {
+            UIWindowSceneGeometryPreferencesIOS *p = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+            [ws requestGeometryUpdateWithPreferences:p errorHandler:^(NSError *e) {
+                Log(LOG_W, @"Orientation update failed: %@", e);
+            }];
+        }
+    } else {
+        [UIViewController attemptRotationToDeviceOrientation];
+    }
+}
+
+- (void)relayoutForSize:(CGSize)s {
+    CGRect full = CGRectMake(0, 0, s.width, s.height);
+    if (_scrollView != nil) {
+        _scrollView.frame = full;
+        if (_scrollView.zoomScale == 1) {
+            _streamView.frame = full;
+        }
+    } else {
+        _streamView.frame = full;
+    }
+    _stageLabel.center = CGPointMake(s.width / 2, s.height / 2);
+    _spinner.center = CGPointMake(s.width / 2, s.height / 2 - _stageLabel.frame.size.height - _spinner.frame.size.height);
+    _tipLabel.center = CGPointMake(s.width / 2, s.height * 0.9);
+    if (_vmouseView != nil) {
+        CGPoint c = _vmouseView.center;
+        CGFloat hw = _vmouseView.bounds.size.width / 2, hh = _vmouseView.bounds.size.height / 2;
+        _vmouseView.center = CGPointMake(MIN(MAX(c.x, hw), s.width - hw), MIN(MAX(c.y, hh), s.height - hh));
+    }
+    if (_keyOverlay != nil) {
+        // Key positions are stored as screen ratios; rebuild so they land on the new size
+        [self rebuildKeyOverlay];
+    }
+    [self layoutPortraitBar];
+}
+
+// Portrait-only shortcut strip under the video (like 阿西西's 竖屏快捷栏)
+- (void)layoutPortraitBar {
+    CGSize s = self.view.bounds.size;
+    BOOL portrait = s.height > s.width;
+    if (!portrait) {
+        _portraitBar.hidden = YES;
+        return;
+    }
+    if (_portraitBar == nil) {
+        __weak typeof(self) ws = self;
+        NSArray *defs = @[
+            @[@"键盘", @"keyboard", ^{ [ws sideKeyboardTapped]; }],
+            @[@"Esc", @"escape", ^{ [ws sendCombo:@[@0x1B]]; }],
+            @[@"Tab", @"arrow.right.to.line", ^{ [ws sendCombo:@[@0x09]]; }],
+            @[@"Win", @"square.grid.2x2", ^{ [ws sendCombo:@[@VK_WIN]]; }],
+            @[@"切窗口", @"arrow.left.arrow.right.square", ^{ [ws sendCombo:@[@VK_ALT, @0x09]]; }],
+            @[@"桌面", @"menubar.dock.rectangle", ^{ [ws sendCombo:@[@VK_WIN, @0x44]]; }],
+            @[@"资源管理器", @"folder", ^{ [ws sendCombo:@[@VK_WIN, @0x45]]; }],
+            @[@"任务管理器", @"chart.bar.doc.horizontal", ^{ [ws sendCombo:@[@VK_CTRL, @VK_SHIFT, @0x1B]]; }],
+            @[@"复制", @"doc.on.doc", ^{ [ws sendCombo:@[@VK_CTRL, @0x43]]; }],
+            @[@"粘贴", @"doc.on.clipboard", ^{ [ws sendCombo:@[@VK_CTRL, @0x56]]; }],
+            @[@"菜单", @"sidebar.right", ^{ [ws openSidePanel]; }],
+        ];
+        UIStackView *row = [[UIStackView alloc] init];
+        row.axis = UILayoutConstraintAxisHorizontal;
+        row.spacing = 8;
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+        for (NSArray *d in defs) {
+            UIButton *b = [self sideTile:d[0] symbol:d[1] height:56 handler:d[2]];
+            [b.widthAnchor constraintEqualToConstant:68].active = YES;
+            [row addArrangedSubview:b];
+        }
+        UIScrollView *bar = [[UIScrollView alloc] init];
+        bar.showsHorizontalScrollIndicator = NO;
+        bar.contentInset = UIEdgeInsetsMake(0, 10, 0, 10);
+        [bar addSubview:row];
+        [NSLayoutConstraint activateConstraints:@[
+            [row.leadingAnchor constraintEqualToAnchor:bar.contentLayoutGuide.leadingAnchor],
+            [row.trailingAnchor constraintEqualToAnchor:bar.contentLayoutGuide.trailingAnchor],
+            [row.topAnchor constraintEqualToAnchor:bar.contentLayoutGuide.topAnchor],
+            [row.bottomAnchor constraintEqualToAnchor:bar.contentLayoutGuide.bottomAnchor],
+            [row.heightAnchor constraintEqualToAnchor:bar.frameLayoutGuide.heightAnchor],
+        ]];
+        _portraitBar = bar;
+        [self.view addSubview:bar];
+    }
+    CGRect vr = [_streamView videoRect];
+    _portraitBar.frame = CGRectMake(0, CGRectGetMaxY(vr) + 10, s.width, 56);
+    _portraitBar.hidden = NO;
+    [self.view bringSubviewToFront:_portraitBar];
+    if (_sidePanel != nil) {
+        [self.view bringSubviewToFront:_sideHandle];
+        [self.view bringSubviewToFront:_sideDim];
+        [self.view bringSubviewToFront:_sidePanel];
+    }
 }
 
 - (void)sidePanStarted:(UIGestureRecognizer *)gesture {
