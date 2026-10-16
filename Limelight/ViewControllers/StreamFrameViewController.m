@@ -60,30 +60,48 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
             cfg.title = items[i];
             cfg.baseForegroundColor = UIColor.whiteColor;
             cfg.background.cornerRadius = 10;
+            // Narrow side panel: tight insets + single line, otherwise UIKit wraps "1080p" into a vertical column
+            cfg.contentInsets = NSDirectionalEdgeInsetsMake(4, 3, 4, 3);
+            cfg.titleLineBreakMode = NSLineBreakByClipping;
             cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
                 NSMutableDictionary *m = [attrs mutableCopy];
-                m[NSFontAttributeName] = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+                m[NSFontAttributeName] = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
                 return m;
             };
             __weak typeof(self) ws = self;
             UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:[UIAction actionWithHandler:^(UIAction *a) {
                 [ws tapped:i];
             }]];
+            b.titleLabel.numberOfLines = 1;
+            b.titleLabel.adjustsFontSizeToFitWidth = YES;
+            b.titleLabel.minimumScaleFactor = 0.7;
             [bs addObject:b];
         }
         _buttons = bs;
-        UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:bs];
-        row.axis = UILayoutConstraintAxisHorizontal;
-        row.distribution = UIStackViewDistributionFillEqually;
-        row.spacing = 8;
-        row.translatesAutoresizingMaskIntoConstraints = NO;
-        [self addSubview:row];
+        // Wrap into rows: up to 4 per row when it fits in one, otherwise 3 per row
+        NSUInteger perRow = bs.count <= 4 ? MAX(bs.count, 1) : 3;
+        UIStackView *grid = [[UIStackView alloc] init];
+        grid.axis = UILayoutConstraintAxisVertical;
+        grid.spacing = 8;
+        grid.translatesAutoresizingMaskIntoConstraints = NO;
+        for (NSUInteger start = 0; start < bs.count; start += perRow) {
+            UIStackView *row = [[UIStackView alloc] init];
+            row.axis = UILayoutConstraintAxisHorizontal;
+            row.distribution = UIStackViewDistributionFillEqually;
+            row.spacing = 8;
+            for (NSUInteger k = 0; k < perRow; k++) {
+                // Pad the last row with empty cells so every button keeps the same width
+                [row addArrangedSubview:start + k < bs.count ? bs[start + k] : [[UIView alloc] init]];
+            }
+            [row.heightAnchor constraintEqualToConstant:42].active = YES;
+            [grid addArrangedSubview:row];
+        }
+        [self addSubview:grid];
         [NSLayoutConstraint activateConstraints:@[
-            [row.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [row.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [row.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-            [row.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-            [row.heightAnchor constraintEqualToConstant:42],
+            [grid.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [grid.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            [grid.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [grid.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         ]];
         _selectedSegmentIndex = -1;
         [self restyle];
