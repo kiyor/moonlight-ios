@@ -21,6 +21,14 @@
 extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
                               int write_seq_header);
 
+NSString *const MLExternalVideoViewChanged = @"MLExternalVideoViewChanged";
+static __weak UIView *gExternalVideoView;
+UIView *MLExternalVideoView(void) { return gExternalVideoView; }
+void MLSetExternalVideoView(UIView *view) {
+    gExternalVideoView = view;
+    [[NSNotificationCenter defaultCenter] postNotificationName:MLExternalVideoViewChanged object:nil];
+}
+
 @implementation VideoDecoderRenderer {
     StreamView* _view;
     id<ConnectionCallbacks> _callbacks;
@@ -145,30 +153,55 @@ void MLSetUseVTDecode(BOOL on) {
     // respects the PAR encoded in the SPS which causes our computed video-relative
     // touch location to be wrong in StreamView if the aspect ratio of the host
     // desktop doesn't match the aspect ratio of the stream.
-    // StreamView owns the video rect (top-aligned in portrait) and re-applies it on rotation
     [_view setStreamAspectRatio:_streamAspectRatio];
-    CGRect vr = [_view videoRect];
-    displayLayer.position = CGPointMake(CGRectGetMidX(vr), CGRectGetMidY(vr));
-    displayLayer.bounds = CGRectMake(0, 0, vr.size.width, vr.size.height);
     displayLayer.videoGravity = AVLayerVideoGravityResize;
 
     // Hide the layer until we get an IDR frame. This ensures we
     // can see the loading progress label as the stream is starting.
     displayLayer.hidden = YES;
     
-    if (oldLayer != nil) {
-        // Switch out the old display layer with the new one
-        [_view.layer replaceSublayer:oldLayer with:displayLayer];
-    }
-    else {
-        // Index 0 so a re-created renderer (in-stream quality change) stays under the on-screen controls
-        [_view.layer insertSublayer:displayLayer atIndex:0];
-    }
+    [oldLayer removeFromSuperlayer];
+    [self attachDisplayLayer];
     
     if (formatDesc != nil) {
         CFRelease(formatDesc);
         formatDesc = nil;
     }
+}
+
+// Put the display layer on the external screen if one is connected, else on the stream view
+- (void)attachDisplayLayer
+{
+    UIView *ext = MLExternalVideoView();
+    UIView *host = ext != nil ? ext : _view;
+    CGRect vr;
+    if (ext != nil) {
+        CGSize b = ext.bounds.size;
+        CGSize v = b.width > b.height * _streamAspectRatio
+            ? CGSizeMake(b.height * _streamAspectRatio, b.height)
+            : CGSizeMake(b.width, b.width / _streamAspectRatio);
+        vr = CGRectMake((b.width - v.width) / 2, (b.height - v.height) / 2, v.width, v.height);
+    } else {
+        // StreamView owns the video rect (top-aligned in portrait) and re-applies it on rotation
+        vr = [_view videoRect];
+    }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if (displayLayer.superlayer != host.layer) {
+        [displayLayer removeFromSuperlayer];
+        // Index 0 so the layer stays under the on-screen controls
+        [host.layer insertSublayer:displayLayer atIndex:0];
+    }
+    displayLayer.position = CGPointMake(CGRectGetMidX(vr), CGRectGetMidY(vr));
+    displayLayer.bounds = CGRectMake(0, 0, vr.size.width, vr.size.height);
+    [CATransaction commit];
+}
+
+- (void)externalViewChanged:(NSNotification *)n
+{
+    [self attachDisplayLayer];
+    // A moved AVSampleBufferDisplayLayer may drop its queue; ask for a clean keyframe
+    LiRequestIdrFrame();
 }
 
 - (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing
@@ -183,6 +216,7 @@ void MLSetUseVTDecode(BOOL on) {
     parameterSetBuffers = [[NSMutableArray alloc] init];
     
     [self reinitializeDisplayLayer];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(externalViewChanged:) name:MLExternalVideoViewChanged object:nil];
     
     return self;
 }

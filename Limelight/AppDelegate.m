@@ -9,6 +9,35 @@
 #import "AppDelegate.h"
 
 #if !TARGET_OS_TV
+#import "VideoDecoderRenderer.h"
+
+// External display (HDMI adapter / AirPlay mirroring): a black full-screen window the
+// stream renderer moves its video layer into. The phone keeps touch/controls.
+@interface ExternalSceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property (strong, nonatomic) UIWindow *window;
+@end
+
+@implementation ExternalSceneDelegate
+
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    if (![scene isKindOfClass:[UIWindowScene class]]) {
+        return;
+    }
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
+    UIViewController *vc = [[UIViewController alloc] init];
+    vc.view.backgroundColor = [UIColor blackColor];
+    self.window.rootViewController = vc;
+    self.window.hidden = NO;
+    MLSetExternalVideoView(vc.view);
+}
+
+- (void)sceneDidDisconnect:(UIScene *)scene {
+    MLSetExternalVideoView(nil);
+    self.window = nil;
+}
+
+@end
+
 // iOS 27 requires UIScene lifecycle adoption; without it UIKit traps at launch.
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;

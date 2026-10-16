@@ -15,6 +15,12 @@
 BOOL MLUseVTDecode(void);
 void MLSetUseVTDecode(BOOL on);
 
+// External display (HDMI/AirPlay mirror): when set, video is drawn there (aspect-fit)
+// and the phone stays as touchpad/controller. Posted on the main thread.
+extern NSString *const MLExternalVideoViewChanged;
+UIView *MLExternalVideoView(void);
+void MLSetExternalVideoView(UIView *view);
+
 @interface VideoDecoderRenderer : NSObject
 
 - (id)initWithView:(UIView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing;
