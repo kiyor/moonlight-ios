@@ -147,6 +147,31 @@
     return TRUE;
 }
 
+- (NSString*) getCompactStatsText {
+    video_stats_t stats;
+
+    if (!_connection) {
+        return nil;
+    }
+
+    if (![_connection getVideoStats:&stats]) {
+        return nil;
+    }
+
+    uint32_t rtt, variance;
+    NSString* rttString = LiGetEstimatedRttInfo(&rtt, &variance) ? [NSString stringWithFormat:@"%u ms", rtt] : @"-- ms";
+    float interval = stats.endTime - stats.startTime;
+    float fps = interval > 0 ? stats.totalFrames / interval : 0;
+    float loss = stats.totalFrames > 0 ? stats.networkDroppedFrames * 100.f / stats.totalFrames : 0;
+    NSString* host = @"";
+    if (stats.framesWithHostProcessingLatency != 0) {
+        host = [NSString stringWithFormat:@" · 主机 %.1f ms",
+                (float)stats.totalHostProcessingLatency / stats.framesWithHostProcessingLatency / 10.f];
+    }
+    return [NSString stringWithFormat:@"%.0f FPS · 延迟 %@ · 丢帧 %.1f%%%@ · %@",
+            fps, rttString, loss, host, [_connection getActiveCodecName]];
+}
+
 - (NSString*) getStatsOverlayText {
     video_stats_t stats;
     

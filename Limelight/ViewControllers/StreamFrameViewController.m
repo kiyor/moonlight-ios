@@ -57,6 +57,9 @@
     UIView *_sideDim;
     UIVisualEffectView *_sidePanel;
     UISegmentedControl *_oscSegment;
+    UISegmentedControl *_statsSegment;
+    UILabel *_compactStatsLabel;
+    NSInteger _statsMode; // 0 off, 1 compact, 2 full
     BOOL _sidePanelOpen;
     NSArray<NSArray *> *_comboKeys;
 #endif
@@ -266,6 +269,12 @@
 #endif
 
 - (void)updateStatsOverlay {
+#if !TARGET_OS_TV
+    if (_statsMode == 1) {
+        [self updateCompactStats:[self->_streamMan getCompactStatsText]];
+        return;
+    }
+#endif
     NSString* overlayText = [self->_streamMan getStatsOverlayText];
     
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -392,6 +401,9 @@
         [self->_controllerSupport connectionEstablished];
         
         if (self->_settings.statsOverlay) {
+#if !TARGET_OS_TV
+            self->_statsMode = 2;
+#endif
             self->_statsUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:1.0f
                                                                        target:self
                                                                      selector:@selector(updateStatsOverlay)
@@ -736,18 +748,27 @@ static const CGFloat kSideHandleHeight = 64;
     _oscSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"简易", @"完整"]];
     [_oscSegment addTarget:self action:@selector(oscSegmentChanged:) forControlEvents:UIControlEventValueChanged];
 
+    UILabel *statsLabel = [[UILabel alloc] init];
+    statsLabel.text = @"性能信息";
+    statsLabel.font = [UIFont systemFontOfSize:13];
+    statsLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    _statsSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"精简", @"完整"]];
+    [_statsSegment addTarget:self action:@selector(statsSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+
     UIButton *keyboardBtn = [self sidePanelButton:@"键盘" symbol:@"keyboard" action:@selector(sideKeyboardTapped)];
     UIButton *disconnectBtn = [self sidePanelButton:@"断开连接" symbol:@"xmark.circle" action:@selector(sideDisconnectTapped)];
     UIButtonConfiguration *dcfg = disconnectBtn.configuration;
     dcfg.baseForegroundColor = UIColor.systemRedColor;
     disconnectBtn.configuration = dcfg;
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, keyboardBtn]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, statsLabel, _statsSegment, keyboardBtn]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 12;
     [stack setCustomSpacing:20 afterView:title];
     [stack setCustomSpacing:6 afterView:oscLabel];
     [stack setCustomSpacing:20 afterView:_oscSegment];
+    [stack setCustomSpacing:6 afterView:statsLabel];
+    [stack setCustomSpacing:20 afterView:_statsSegment];
     [stack setCustomSpacing:20 afterView:keyboardBtn];
     [self addComboSectionsToStack:stack];
     [stack addArrangedSubview:disconnectBtn];
@@ -945,6 +966,7 @@ static char modifierForVk(short vk) {
     }
     _sidePanelOpen = YES;
     [self syncOscSegment];
+    _statsSegment.selectedSegmentIndex = _statsMode;
     [self.view bringSubviewToFront:_sideDim];
     [self.view bringSubviewToFront:_sidePanel];
     _sideDim.hidden = NO;
@@ -992,6 +1014,56 @@ static char modifierForVk(short vk) {
 - (void)sideKeyboardTapped {
     [self closeSidePanel];
     [_streamView toggleKeyboard];
+}
+
+- (void)statsSegmentChanged:(UISegmentedControl *)seg {
+    [self setStatsMode:seg.selectedSegmentIndex];
+}
+
+- (void)setStatsMode:(NSInteger)mode {
+    _statsMode = mode;
+    [_statsUpdateTimer invalidate];
+    _statsUpdateTimer = nil;
+    [_overlayView setHidden:YES];
+    _compactStatsLabel.hidden = YES;
+    if (mode == 0) {
+        return;
+    }
+    _statsUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:1.0f
+                                                         target:self
+                                                       selector:@selector(updateStatsOverlay)
+                                                       userInfo:nil
+                                                        repeats:YES];
+    [self updateStatsOverlay];
+}
+
+- (void)updateCompactStats:(NSString *)text {
+    if (_compactStatsLabel == nil) {
+        _compactStatsLabel = [[UILabel alloc] init];
+        _compactStatsLabel.font = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightMedium];
+        _compactStatsLabel.textColor = [UIColor colorWithWhite:1 alpha:0.9];
+        _compactStatsLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+        _compactStatsLabel.textAlignment = NSTextAlignmentCenter;
+        _compactStatsLabel.layer.cornerRadius = 6;
+        _compactStatsLabel.clipsToBounds = YES;
+        _compactStatsLabel.userInteractionEnabled = NO;
+        [self.view addSubview:_compactStatsLabel];
+    }
+    if (text == nil) {
+        _compactStatsLabel.hidden = YES;
+        return;
+    }
+    _compactStatsLabel.hidden = NO;
+    _compactStatsLabel.text = text;
+    [_compactStatsLabel sizeToFit];
+    UIEdgeInsets inset = self.view.safeAreaInsets;
+    CGSize sz = _compactStatsLabel.bounds.size;
+    _compactStatsLabel.frame = CGRectMake(inset.left + 8, inset.top + 4, sz.width + 14, sz.height + 6);
+    [self.view bringSubviewToFront:_compactStatsLabel];
+    if (_sidePanelOpen) {
+        [self.view bringSubviewToFront:_sideDim];
+        [self.view bringSubviewToFront:_sidePanel];
+    }
 }
 
 - (void)sideDisconnectTapped {
