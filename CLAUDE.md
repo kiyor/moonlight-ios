@@ -13,6 +13,7 @@
 ## 痛点清单
 - ✅ 右侧侧边栏（边缘拉出）：虚拟手柄档位、键盘、Windows 组合键、断开连接
 - 侧栏排版照阿西西 `dialog_game_menu.xml`：外侧常用键竖列 + 磁贴格子（点按开关、长按进二级页）+ 二级页（快捷键/性能/手柄/触控）；控件自绘（`MLOptionGroup`），不用系统 UISegmentedControl（4edba8f，待主人实测）
+- 串流中调画质（分辨率/帧率/码率）：侧栏「画质」页，改 `streamConfig` 后停流+重建 StreamManager 重连，只改本次不改默认（c0b845b，待主人实测）
 - 性能信息「详细」模式 9 项可单独开关，存在 NSUserDefaults `moonlight.statsItems`（da33ff2）
 
 ## 阿西西特色功能移植队列（按性价比排序，做完打 ✅）
