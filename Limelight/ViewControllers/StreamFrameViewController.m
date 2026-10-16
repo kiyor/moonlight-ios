@@ -63,6 +63,8 @@
     NSInteger _statsMode; // 0 off, 1 compact, 2 full
     BOOL _sidePanelOpen;
     NSArray<NSArray *> *_comboKeys;
+    UIStackView *_customComboStack;
+    NSMutableArray<NSDictionary *> *_customCombos;
 #endif
 }
 
@@ -812,6 +814,7 @@ static const CGFloat kSideHandleHeight = 64;
 #define VK_SHIFT 0xA0
 
 - (void)addComboSectionsToStack:(UIStackView *)stack {
+    [self addCustomComboSectionToStack:stack];
     // { section title, @[ @[label, @[vk...]], ... ] }
     NSArray *sections = @[
         @[@"窗口", @[
@@ -892,6 +895,173 @@ static const CGFloat kSideHandleHeight = 64;
     _comboKeys = all;
 }
 
+static NSString *const kCustomCombosKey = @"moonlight.customCombos";
+
+static NSNumber *vkForToken(NSString *t) {
+    NSDictionary *named = @{@"ctrl": @VK_CTRL, @"control": @VK_CTRL, @"shift": @VK_SHIFT, @"alt": @VK_ALT,
+                            @"win": @VK_WIN, @"meta": @VK_WIN, @"cmd": @VK_WIN,
+                            @"esc": @0x1B, @"enter": @0x0D, @"tab": @0x09, @"space": @0x20,
+                            @"del": @0x2E, @"delete": @0x2E, @"backspace": @0x08, @"bs": @0x08,
+                            @"up": @0x26, @"down": @0x28, @"left": @0x25, @"right": @0x27,
+                            @"home": @0x24, @"end": @0x23, @"pgup": @0x21, @"pgdn": @0x22,
+                            @"ins": @0x2D, @"insert": @0x2D, @"prtsc": @0x2C};
+    NSNumber *n = named[t];
+    if (n != nil) {
+        return n;
+    }
+    if (t.length == 1) {
+        unichar c = [t.uppercaseString characterAtIndex:0];
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            return @(c);
+        }
+    }
+    if (t.length >= 2 && [t hasPrefix:@"f"]) {
+        int f = [[t substringFromIndex:1] intValue];
+        if (f >= 1 && f <= 24) {
+            return @(0x70 + f - 1);
+        }
+    }
+    return nil;
+}
+
+static NSArray<NSNumber *> *parseComboSpec(NSString *spec) {
+    NSMutableArray *keys = [NSMutableArray array];
+    for (NSString *raw in [spec.lowercaseString componentsSeparatedByString:@"+"]) {
+        NSString *t = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        NSNumber *vk = t.length ? vkForToken(t) : nil;
+        if (vk == nil) {
+            return nil;
+        }
+        [keys addObject:vk];
+    }
+    return keys.count ? keys : nil;
+}
+
+- (UIButton *)comboButton:(NSString *)title {
+    UIButtonConfiguration *cfg = [UIButtonConfiguration grayButtonConfiguration];
+    cfg.title = title;
+    cfg.baseForegroundColor = UIColor.whiteColor;
+    cfg.contentInsets = NSDirectionalEdgeInsetsMake(8, 2, 8, 2);
+    cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attrs) {
+        NSMutableDictionary *m = [attrs mutableCopy];
+        m[NSFontAttributeName] = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        return m;
+    };
+    UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
+    b.titleLabel.adjustsFontSizeToFitWidth = YES;
+    [b.heightAnchor constraintEqualToConstant:40].active = YES;
+    return b;
+}
+
+- (void)addCustomComboSectionToStack:(UIStackView *)stack {
+    _customCombos = [[[NSUserDefaults standardUserDefaults] arrayForKey:kCustomCombosKey] mutableCopy] ?: [NSMutableArray array];
+    UILabel *label = [[UILabel alloc] init];
+    label.text = @"自定义（长按删除）";
+    label.font = [UIFont systemFontOfSize:13];
+    label.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    [stack addArrangedSubview:label];
+    [stack setCustomSpacing:6 afterView:label];
+    _customComboStack = [[UIStackView alloc] init];
+    _customComboStack.axis = UILayoutConstraintAxisVertical;
+    _customComboStack.spacing = 6;
+    [stack addArrangedSubview:_customComboStack];
+    [stack setCustomSpacing:16 afterView:_customComboStack];
+    [self rebuildCustomCombos];
+}
+
+- (void)rebuildCustomCombos {
+    for (UIView *v in _customComboStack.arrangedSubviews) {
+        [v removeFromSuperview];
+    }
+    NSUInteger count = _customCombos.count + 1;
+    UIStackView *row = nil;
+    for (NSUInteger i = 0; i < count; i++) {
+        if (i % 3 == 0) {
+            row = [[UIStackView alloc] init];
+            row.axis = UILayoutConstraintAxisHorizontal;
+            row.distribution = UIStackViewDistributionFillEqually;
+            row.spacing = 6;
+            [_customComboStack addArrangedSubview:row];
+        }
+        UIButton *b;
+        if (i < _customCombos.count) {
+            b = [self comboButton:_customCombos[i][@"name"]];
+            b.tag = i;
+            [b addTarget:self action:@selector(customComboTapped:) forControlEvents:UIControlEventTouchUpInside];
+            [b addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(customComboLongPressed:)]];
+        } else {
+            b = [self comboButton:@"+ 添加"];
+            [b addTarget:self action:@selector(addCustomComboTapped) forControlEvents:UIControlEventTouchUpInside];
+        }
+        [row addArrangedSubview:b];
+    }
+    while (row.arrangedSubviews.count < 3) {
+        [row addArrangedSubview:[[UIView alloc] init]];
+    }
+}
+
+- (void)saveCustomCombos {
+    [[NSUserDefaults standardUserDefaults] setObject:_customCombos forKey:kCustomCombosKey];
+}
+
+- (void)customComboTapped:(UIButton *)sender {
+    [self sendCombo:_customCombos[sender.tag][@"keys"]];
+}
+
+- (void)customComboLongPressed:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) {
+        return;
+    }
+    NSInteger idx = g.view.tag;
+    if (idx >= (NSInteger)_customCombos.count) {
+        return;
+    }
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"删除「%@」？", _customCombos[idx][@"name"]]
+                                                               message:_customCombos[idx][@"spec"]
+                                                        preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) {
+        [self->_customCombos removeObjectAtIndex:idx];
+        [self saveCustomCombos];
+        [self rebuildCustomCombos];
+    }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+- (void)addCustomComboTapped {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"添加组合键"
+                                                               message:@"按键用 + 连接，例如 ctrl+shift+t、win+v、alt+f4、f2"
+                                                        preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"名称（可空）";
+    }];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"ctrl+shift+t";
+        tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        tf.autocorrectionType = UITextAutocorrectionTypeNo;
+    }];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController *wa = a;
+    [a addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        NSCharacterSet *ws = NSCharacterSet.whitespaceCharacterSet;
+        NSString *name = [wa.textFields[0].text stringByTrimmingCharactersInSet:ws];
+        NSString *spec = [wa.textFields[1].text stringByTrimmingCharactersInSet:ws];
+        NSArray *keys = parseComboSpec(spec);
+        if (keys == nil) {
+            UIAlertController *err = [UIAlertController alertControllerWithTitle:@"认不出这个组合键"
+                                                                         message:spec.length ? spec : @"（空）"
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+            [err addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:err animated:YES completion:nil];
+            return;
+        }
+        [self->_customCombos addObject:@{@"name": name.length ? name : spec, @"spec": spec, @"keys": keys}];
+        [self saveCustomCombos];
+        [self rebuildCustomCombos];
+    }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
 static char modifierForVk(short vk) {
     switch (vk) {
         case VK_WIN: return MODIFIER_META;
@@ -903,7 +1073,10 @@ static char modifierForVk(short vk) {
 }
 
 - (void)comboTapped:(UIButton *)sender {
-    NSArray<NSNumber *> *keys = _comboKeys[sender.tag];
+    [self sendCombo:_comboKeys[sender.tag]];
+}
+
+- (void)sendCombo:(NSArray<NSNumber *> *)keys {
     [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight].impactOccurred;
     [self closeSidePanel];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
