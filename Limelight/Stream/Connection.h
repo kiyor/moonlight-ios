@@ -30,6 +30,8 @@ typedef struct {
 
 // Called from the VideoToolbox output callback (any thread) with one frame's decode time
 void MLRecordDecodeTime(uint64_t us);
+// Low-frequency (<~120 Hz) loudness of the last audio frame, 0..1000 (for audio haptics)
+int MLGetBassLevel(void);
 
 @interface Connection : NSOperation <NSStreamDelegate>
 

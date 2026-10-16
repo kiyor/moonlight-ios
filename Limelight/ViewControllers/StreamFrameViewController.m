@@ -264,6 +264,9 @@ static char modifierForVk(short vk);
     BOOL _reconnecting;
     BOOL _resumeOnForeground;
     UIView *_vmouseView;
+    NSTimer *_hapticTimer;
+    UIImpactFeedbackGenerator *_hapticGen;
+    CFTimeInterval _lastHaptic;
     MLPassthroughView *_keyOverlay;
     NSMutableArray<NSDictionary *> *_keyLayout;
     BOOL _keysVisible;
@@ -1274,6 +1277,21 @@ static const CGFloat kSideHandleHeight = 64;
     [osc addArrangedSubview:_oscSegment];
     [osc addArrangedSubview:[self sideHint:@"主菜单按钮在「关」和上次的档位之间切换。"]];
     _sidePages[@"osc"] = [self sideScrollPage:osc];
+    [osc setCustomSpacing:18 afterView:osc.arrangedSubviews.lastObject];
+    [osc addArrangedSubview:[self sideSectionLabel:@"音频震动"]];
+    MLOptionGroup *hap = [[MLOptionGroup alloc] initWithItems:@[@"开", @"关"]];
+    hap.selectedSegmentIndex = [[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.audioHaptics"] ? 0 : 1;
+    __weak typeof(self) wsh = self;
+    [hap addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        BOOL on = ((MLOptionGroup *)a.sender).selectedSegmentIndex == 0;
+        [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"moonlight.audioHaptics"];
+        [wsh setAudioHaptics:on];
+    }] forControlEvents:UIControlEventValueChanged];
+    [osc addArrangedSubview:hap];
+    [osc addArrangedSubview:[self sideHint:@"跟着游戏低音（爆炸、鼓点、引擎）让手机震动。"]];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.audioHaptics"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [wsh setAudioHaptics:YES]; });
+    }
 
     UIStackView *touch = [self sideSubStack:@"触控模式"];
     _touchSegment = [[MLOptionGroup alloc] initWithItems:@[@"触控板", @"直接点击"]];
@@ -1333,6 +1351,31 @@ static const CGFloat kSideHandleHeight = 64;
 - (void)vmouseDown:(UIButton *)b {
     [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight].impactOccurred;
     LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, (int)b.tag);
+}
+
+- (void)setAudioHaptics:(BOOL)on {
+    [_hapticTimer invalidate];
+    _hapticTimer = nil;
+    if (!on) {
+        return;
+    }
+    _hapticGen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+    [_hapticGen prepare];
+    __weak typeof(self) ws = self;
+    _hapticTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 30 repeats:YES block:^(NSTimer *t) {
+        typeof(self) ss = ws;
+        if (ss == nil) {
+            [t invalidate];
+            return;
+        }
+        int lvl = MLGetBassLevel();
+        CFTimeInterval now = CACurrentMediaTime();
+        // Threshold + 60 ms refractory so sustained bass pulses instead of buzzing constantly
+        if (lvl > 120 && now - ss->_lastHaptic > 0.06) {
+            ss->_lastHaptic = now;
+            [ss->_hapticGen impactOccurredWithIntensity:MIN(1.0, lvl / 600.0)];
+        }
+    }];
 }
 
 - (void)vmouseUp:(UIButton *)b {

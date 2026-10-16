@@ -298,6 +298,32 @@ void ArCleanup(void)
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
+static _Atomic int gBassLevel;
+static float gBassLp;
+
+// One-pole low-pass (~120 Hz at 48 kHz) on the mono mix, RMS of the result
+static void MLMeasureBass(const short *pcm, int frames, int channels) {
+    const float a = 0.0156f;
+    double sum = 0;
+    float lp = gBassLp;
+    for (int i = 0; i < frames; i++) {
+        float m = 0;
+        for (int c = 0; c < channels && c < 2; c++) {
+            m += pcm[i * channels + c];
+        }
+        m /= (channels >= 2 ? 2 : 1) * 32768.0f;
+        lp += a * (m - lp);
+        sum += lp * lp;
+    }
+    gBassLp = lp;
+    float rms = frames > 0 ? sqrtf((float)(sum / frames)) : 0;
+    gBassLevel = (int)fminf(rms * 4000.0f, 1000.0f);
+}
+
+int MLGetBassLevel(void) {
+    return gBassLevel;
+}
+
 void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
 {
     int decodeLen;
@@ -311,6 +337,8 @@ void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
     decodeLen = opus_multistream_decode(opusDecoder, (unsigned char *)sampleData, sampleLength,
                                         (short*)audioBuffer, audioConfig.samplesPerFrame, 0);
     if (decodeLen > 0) {
+        MLMeasureBass((short *)audioBuffer, decodeLen, audioConfig.channelCount);
+        
         // Provide backpressure on the queue to ensure too many frames don't build up
         // in SDL's audio queue.
         while (SDL_GetQueuedAudioSize(audioDevice) / audioFrameSize > 10) {
