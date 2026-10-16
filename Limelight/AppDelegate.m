@@ -8,6 +8,44 @@
 
 #import "AppDelegate.h"
 
+#if !TARGET_OS_TV
+// iOS 27 requires UIScene lifecycle adoption; without it UIKit traps at launch.
+@interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property (strong, nonatomic) UIWindow *window;
+@end
+
+@implementation SceneDelegate
+
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    if (![scene isKindOfClass:[UIWindowScene class]]) {
+        return;
+    }
+    AppDelegate* app = (AppDelegate*)[UIApplication sharedApplication].delegate;
+    if (connectionOptions.shortcutItem != nil) {
+        app.pcUuidToLoad = (NSString*)[connectionOptions.shortcutItem.userInfo objectForKey:@"UUID"];
+    }
+
+    NSString* sbName = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"iPad" : @"iPhone";
+    UIStoryboard* sb = [UIStoryboard storyboardWithName:sbName bundle:nil];
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
+    self.window.rootViewController = [sb instantiateInitialViewController];
+    app.window = self.window;
+    [self.window makeKeyAndVisible];
+}
+
+- (void)windowScene:(UIWindowScene *)windowScene performActionForShortcutItem:(UIApplicationShortcutItem *)shortcutItem completionHandler:(void (^)(BOOL))completionHandler {
+    AppDelegate* app = (AppDelegate*)[UIApplication sharedApplication].delegate;
+    app.pcUuidToLoad = (NSString*)[shortcutItem.userInfo objectForKey:@"UUID"];
+    app.shortcutCompletionHandler = completionHandler;
+}
+
+- (void)sceneDidEnterBackground:(UIScene *)scene {
+    [(AppDelegate*)[UIApplication sharedApplication].delegate saveContext];
+}
+
+@end
+#endif
+
 @implementation AppDelegate
 
 @synthesize managedObjectContext = _managedObjectContext;
