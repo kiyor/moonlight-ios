@@ -1124,6 +1124,15 @@ static const CGFloat kSideHandleHeight = 64;
     [stats setCustomSpacing:16 afterView:_statsSegment];
     [stats addArrangedSubview:[self sideSectionLabel:@"显示项（详细模式，点选开关）"]];
     [stats addArrangedSubview:[self statsItemGrid]];
+    [stats setCustomSpacing:16 afterView:stats.arrangedSubviews.lastObject];
+    [stats addArrangedSubview:[self sideSectionLabel:@"解码方式"]];
+    MLOptionGroup *dec = [[MLOptionGroup alloc] initWithItems:@[@"测解码耗时", @"原版直出"]];
+    dec.selectedSegmentIndex = MLUseVTDecode() ? 0 : 1;
+    [dec addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        MLSetUseVTDecode(((MLOptionGroup *)a.sender).selectedSegmentIndex == 0);
+    }] forControlEvents:UIControlEventValueChanged];
+    [stats addArrangedSubview:dec];
+    [stats addArrangedSubview:[self sideHint:@"「原版直出」走系统显示层解码，和官方 Moonlight 一致，但看不到解码耗时。画面异常时切过去试试。"]];
     [stats addArrangedSubview:[self sideHint:@"主菜单的「性能信息」按钮可一键开关；长按直接进这一页。"]];
     _sidePages[@"stats"] = [self sideScrollPage:stats];
 

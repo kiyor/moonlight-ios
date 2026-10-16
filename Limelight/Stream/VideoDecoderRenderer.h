@@ -12,6 +12,9 @@
 
 #include "Limelight.h"
 
+BOOL MLUseVTDecode(void);
+void MLSetUseVTDecode(BOOL on);
+
 @interface VideoDecoderRenderer : NSObject
 
 - (id)initWithView:(UIView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing;

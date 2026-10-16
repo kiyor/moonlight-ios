@@ -83,9 +83,32 @@ static void MLDecompressionOutput(void *refCon, void *frameRefCon, OSStatus stat
     }
 }
 
+// User toggle (side panel → 性能信息 → 解码方式). YES = decode via VideoToolbox (measures decode time),
+// NO = hand compressed frames to AVSampleBufferDisplayLayer like upstream.
+static _Atomic int gUseVTDecode = -1;
+
+BOOL MLUseVTDecode(void) {
+    if (gUseVTDecode < 0) {
+        id v = [[NSUserDefaults standardUserDefaults] objectForKey:@"moonlight.vtDecode"];
+        gUseVTDecode = v == nil ? 1 : [v boolValue];
+    }
+    return gUseVTDecode == 1;
+}
+
+void MLSetUseVTDecode(BOOL on) {
+    gUseVTDecode = on ? 1 : 0;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"moonlight.vtDecode"];
+    // Switching paths mid-stream needs a fresh IDR for whichever decoder takes over
+    LiRequestIdrFrame();
+}
+
 // Decode ourselves with VideoToolbox (instead of handing compressed frames to the layer)
 // so we can measure per-frame decode time. Falls back to layer decoding if VT refuses.
 - (BOOL)ensureDecompressionSession {
+    if (!MLUseVTDecode()) {
+        [self resetDecompressionSession];
+        return NO;
+    }
     if (_vtSession != NULL && VTDecompressionSessionCanAcceptFormatDescription(_vtSession, formatDesc)) {
         return YES;
     }
