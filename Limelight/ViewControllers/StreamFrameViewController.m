@@ -50,6 +50,13 @@
     
 #if !TARGET_OS_TV
     UIScreenEdgePanGestureRecognizer *_exitSwipeRecognizer;
+    // 月光 right side panel
+    UIScreenEdgePanGestureRecognizer *_sideEdgeRecognizer;
+    UIButton *_sideHandle;
+    UIView *_sideDim;
+    UIVisualEffectView *_sidePanel;
+    UISegmentedControl *_oscSegment;
+    BOOL _sidePanelOpen;
 #endif
 }
 
@@ -209,6 +216,9 @@
     [self.view addSubview:_stageLabel];
     [self.view addSubview:_spinner];
     [self.view addSubview:_tipLabel];
+#if !TARGET_OS_TV
+    [self setupSidePanel];
+#endif
 }
 
 - (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
@@ -677,6 +687,184 @@
 }
 
 #if !TARGET_OS_TV
+#pragma mark - 月光 side panel
+
+static const CGFloat kSideHandleWidth = 18;
+static const CGFloat kSideHandleHeight = 64;
+
+- (void)setupSidePanel {
+    _sideHandle = [UIButton buttonWithType:UIButtonTypeCustom];
+    _sideHandle.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+    _sideHandle.layer.cornerRadius = 8;
+    _sideHandle.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMinXMaxYCorner;
+    _sideHandle.tintColor = [UIColor colorWithWhite:1 alpha:0.75];
+    [_sideHandle setImage:[UIImage systemImageNamed:@"chevron.compact.left"] forState:UIControlStateNormal];
+    [_sideHandle addTarget:self action:@selector(openSidePanel) forControlEvents:UIControlEventTouchUpInside];
+    UIPanGestureRecognizer *handlePan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(sidePanStarted:)];
+    [_sideHandle addGestureRecognizer:handlePan];
+
+    _sideEdgeRecognizer = [[UIScreenEdgePanGestureRecognizer alloc] initWithTarget:self action:@selector(sidePanStarted:)];
+    _sideEdgeRecognizer.edges = UIRectEdgeRight;
+    _sideEdgeRecognizer.delaysTouchesBegan = NO;
+    _sideEdgeRecognizer.delaysTouchesEnded = NO;
+    [self.view addGestureRecognizer:_sideEdgeRecognizer];
+
+    _sideDim = [[UIView alloc] init];
+    _sideDim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
+    _sideDim.alpha = 0;
+    _sideDim.hidden = YES;
+    [_sideDim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeSidePanel)]];
+
+    _sidePanel = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterialDark]];
+    _sidePanel.hidden = YES;
+    UISwipeGestureRecognizer *swipeClose = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(closeSidePanel)];
+    swipeClose.direction = UISwipeGestureRecognizerDirectionRight;
+    [_sidePanel addGestureRecognizer:swipeClose];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.text = @"月光";
+    title.font = [UIFont boldSystemFontOfSize:20];
+    title.textColor = UIColor.whiteColor;
+
+    UILabel *oscLabel = [[UILabel alloc] init];
+    oscLabel.text = @"虚拟按键";
+    oscLabel.font = [UIFont systemFontOfSize:13];
+    oscLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+
+    _oscSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"简易", @"完整"]];
+    [_oscSegment addTarget:self action:@selector(oscSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+
+    UIButton *keyboardBtn = [self sidePanelButton:@"键盘" symbol:@"keyboard" action:@selector(sideKeyboardTapped)];
+    UIButton *disconnectBtn = [self sidePanelButton:@"断开连接" symbol:@"xmark.circle" action:@selector(sideDisconnectTapped)];
+    UIButtonConfiguration *dcfg = disconnectBtn.configuration;
+    dcfg.baseForegroundColor = UIColor.systemRedColor;
+    disconnectBtn.configuration = dcfg;
+
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, keyboardBtn, disconnectBtn]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 12;
+    [stack setCustomSpacing:20 afterView:title];
+    [stack setCustomSpacing:6 afterView:oscLabel];
+    [stack setCustomSpacing:20 afterView:_oscSegment];
+    [stack setCustomSpacing:28 afterView:keyboardBtn];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [_sidePanel.contentView addSubview:stack];
+    UILayoutGuide *g = _sidePanel.contentView.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.topAnchor constraintEqualToAnchor:g.topAnchor constant:16],
+        [stack.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:16],
+        [stack.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-16],
+    ]];
+
+    [self.view addSubview:_sideHandle];
+    [self.view addSubview:_sideDim];
+    [self.view addSubview:_sidePanel];
+}
+
+- (UIButton *)sidePanelButton:(NSString *)title symbol:(NSString *)symbol action:(SEL)action {
+    UIButtonConfiguration *cfg = [UIButtonConfiguration grayButtonConfiguration];
+    cfg.title = title;
+    cfg.image = [UIImage systemImageNamed:symbol];
+    cfg.imagePadding = 10;
+    cfg.baseForegroundColor = UIColor.whiteColor;
+    UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
+    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+    [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    [b.heightAnchor constraintEqualToConstant:44].active = YES;
+    return b;
+}
+
+- (CGFloat)sidePanelWidth {
+    return MIN(300, self.view.bounds.size.width * 0.8) + self.view.safeAreaInsets.right;
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    if (_sidePanel == nil) {
+        return;
+    }
+    CGSize s = self.view.bounds.size;
+    CGFloat pw = [self sidePanelWidth];
+    _sideHandle.frame = CGRectMake(s.width - kSideHandleWidth, (s.height - kSideHandleHeight) / 2, kSideHandleWidth, kSideHandleHeight);
+    _sideDim.frame = self.view.bounds;
+    _sidePanel.frame = CGRectMake(_sidePanelOpen ? s.width - pw : s.width, 0, pw, s.height);
+}
+
+- (void)sidePanStarted:(UIGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        [self openSidePanel];
+    }
+}
+
+- (void)syncOscSegment {
+    switch ([_streamView getCurrentOscState]) {
+        case OnScreenControlsLevelOff: _oscSegment.selectedSegmentIndex = 0; break;
+        case OnScreenControlsLevelSimple: _oscSegment.selectedSegmentIndex = 1; break;
+        case OnScreenControlsLevelFull: _oscSegment.selectedSegmentIndex = 2; break;
+        default: _oscSegment.selectedSegmentIndex = UISegmentedControlNoSegment; break;
+    }
+}
+
+- (void)openSidePanel {
+    if (_sidePanelOpen) {
+        return;
+    }
+    _sidePanelOpen = YES;
+    [self syncOscSegment];
+    [self.view bringSubviewToFront:_sideDim];
+    [self.view bringSubviewToFront:_sidePanel];
+    _sideDim.hidden = NO;
+    _sidePanel.hidden = NO;
+    CGSize s = self.view.bounds.size;
+    CGFloat pw = [self sidePanelWidth];
+    _sidePanel.frame = CGRectMake(s.width, 0, pw, s.height);
+    [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
+        self->_sidePanel.frame = CGRectMake(s.width - pw, 0, pw, s.height);
+        self->_sideDim.alpha = 1;
+        self->_sideHandle.alpha = 0;
+    } completion:nil];
+}
+
+- (void)closeSidePanel {
+    if (!_sidePanelOpen) {
+        return;
+    }
+    _sidePanelOpen = NO;
+    CGSize s = self.view.bounds.size;
+    CGFloat pw = [self sidePanelWidth];
+    [UIView animateWithDuration:0.2 animations:^{
+        self->_sidePanel.frame = CGRectMake(s.width, 0, pw, s.height);
+        self->_sideDim.alpha = 0;
+        self->_sideHandle.alpha = 1;
+    } completion:^(BOOL finished) {
+        if (!self->_sidePanelOpen) {
+            self->_sidePanel.hidden = YES;
+            self->_sideDim.hidden = YES;
+        }
+    }];
+}
+
+- (void)oscSegmentChanged:(UISegmentedControl *)seg {
+    OnScreenControlsLevel level = OnScreenControlsLevelOff;
+    if (seg.selectedSegmentIndex == 1) {
+        level = OnScreenControlsLevelSimple;
+    } else if (seg.selectedSegmentIndex == 2) {
+        level = OnScreenControlsLevelFull;
+    }
+    [_streamView setOnScreenControlsLevel:level];
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+}
+
+- (void)sideKeyboardTapped {
+    [self closeSidePanel];
+    [_streamView toggleKeyboard];
+}
+
+- (void)sideDisconnectTapped {
+    [self closeSidePanel];
+    [self returnToMainFrame];
+}
+
 // Require a confirmation when streaming to activate a system gesture
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures {
     return UIRectEdgeAll;

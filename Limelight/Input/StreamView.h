@@ -31,6 +31,8 @@
 - (OnScreenControlsLevel) getCurrentOscState;
 
 #if !TARGET_OS_TV
+- (void) setOnScreenControlsLevel:(OnScreenControlsLevel)level;
+- (void) toggleKeyboard;
 - (void) updateCursorLocation:(CGPoint)location isMouse:(BOOL)isMouse;
 #endif
 
