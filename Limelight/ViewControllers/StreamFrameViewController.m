@@ -31,6 +31,8 @@
 - (id)initWithRefreshRate:(float)arg1 videoDynamicRange:(int)arg2;
 @end
 
+static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
+
 @implementation StreamFrameViewController {
     ControllerSupport *_controllerSupport;
     StreamManager *_streamMan;
@@ -61,6 +63,8 @@
     UISegmentedControl *_touchSegment;
     UILabel *_compactStatsLabel;
     NSInteger _statsMode; // 0 off, 1 compact, 2 full
+    NSMutableSet<NSString *> *_statsItemsOn;
+    NSMutableArray<UIButton *> *_statsItemButtons;
     BOOL _sidePanelOpen;
     NSArray<NSArray *> *_comboKeys;
     UIStackView *_customComboStack;
@@ -274,7 +278,18 @@
 - (void)updateStatsOverlay {
 #if !TARGET_OS_TV
     if (_statsMode == 1) {
-        [self updateCompactStats:[self->_streamMan getCompactStatsText]];
+        NSDictionary *d = [self->_streamMan getStatsItems];
+        if (d == nil) {
+            [self updateCompactStats:nil];
+            return;
+        }
+        NSMutableArray *lines = [NSMutableArray array];
+        for (NSArray *def in statsItemDefs()) {
+            if ([_statsItemsOn containsObject:def[0]] && d[def[0]] != nil) {
+                [lines addObject:[NSString stringWithFormat:@"%@  %@", def[1], d[def[0]]]];
+            }
+        }
+        [self updateCompactStats:lines.count ? [lines componentsJoinedByString:@"\n"] : @"（未选任何项）"];
         return;
     }
 #endif
@@ -755,8 +770,9 @@ static const CGFloat kSideHandleHeight = 64;
     statsLabel.text = @"性能信息";
     statsLabel.font = [UIFont systemFontOfSize:13];
     statsLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
-    _statsSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"精简", @"完整"]];
+    _statsSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"详细", @"原版"]];
     [_statsSegment addTarget:self action:@selector(statsSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+    UIStackView *statsGrid = [self statsItemGrid];
 
     UILabel *touchLabel = [[UILabel alloc] init];
     touchLabel.text = @"触控模式";
@@ -771,7 +787,7 @@ static const CGFloat kSideHandleHeight = 64;
     dcfg.baseForegroundColor = UIColor.systemRedColor;
     disconnectBtn.configuration = dcfg;
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, touchLabel, _touchSegment, statsLabel, _statsSegment, keyboardBtn]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, touchLabel, _touchSegment, statsLabel, _statsSegment, statsGrid, keyboardBtn]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 12;
     [stack setCustomSpacing:20 afterView:title];
@@ -780,7 +796,8 @@ static const CGFloat kSideHandleHeight = 64;
     [stack setCustomSpacing:6 afterView:touchLabel];
     [stack setCustomSpacing:20 afterView:_touchSegment];
     [stack setCustomSpacing:6 afterView:statsLabel];
-    [stack setCustomSpacing:20 afterView:_statsSegment];
+    [stack setCustomSpacing:6 afterView:_statsSegment];
+    [stack setCustomSpacing:20 afterView:statsGrid];
     [stack setCustomSpacing:20 afterView:keyboardBtn];
     [self addComboSectionsToStack:stack];
     [stack addArrangedSubview:disconnectBtn];
@@ -1204,6 +1221,68 @@ static char modifierForVk(short vk) {
     [self setStatsMode:seg.selectedSegmentIndex];
 }
 
+static NSString *const kStatsItemsKey = @"moonlight.statsItems";
+
+static NSArray<NSArray<NSString *> *> *statsItemDefs(void) {
+    return @[@[@"res", @"分辨率"], @[@"fps", @"帧率"], @[@"codec", @"编码"],
+             @[@"bitrate", @"码率"], @[@"net", @"网络延迟"], @[@"loss", @"丢帧"],
+             @[@"recv", @"接收耗时"], @[@"queue", @"解码排队"], @[@"host", @"主机处理"]];
+}
+
+- (UIStackView *)statsItemGrid {
+    NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:kStatsItemsKey];
+    _statsItemsOn = [NSMutableSet setWithArray:saved ?: @[@"res", @"fps", @"net", @"loss", @"bitrate"]];
+    _statsItemButtons = [NSMutableArray array];
+    UIStackView *grid = [[UIStackView alloc] init];
+    grid.axis = UILayoutConstraintAxisVertical;
+    grid.spacing = 6;
+    NSArray *defs = statsItemDefs();
+    UIStackView *row = nil;
+    for (NSUInteger i = 0; i < defs.count; i++) {
+        if (i % 3 == 0) {
+            row = [[UIStackView alloc] init];
+            row.axis = UILayoutConstraintAxisHorizontal;
+            row.distribution = UIStackViewDistributionFillEqually;
+            row.spacing = 6;
+            [grid addArrangedSubview:row];
+        }
+        UIButton *b = [self comboButton:defs[i][1]];
+        b.tag = i;
+        [b addTarget:self action:@selector(statsItemTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [_statsItemButtons addObject:b];
+        [row addArrangedSubview:b];
+    }
+    [self refreshStatsItemButtons];
+    return grid;
+}
+
+- (void)refreshStatsItemButtons {
+    NSArray *defs = statsItemDefs();
+    for (UIButton *b in _statsItemButtons) {
+        BOOL on = [_statsItemsOn containsObject:defs[b.tag][0]];
+        UIButtonConfiguration *cfg = b.configuration;
+        cfg.background.backgroundColor = on ? UIColor.systemBlueColor : [UIColor colorWithWhite:1 alpha:0.12];
+        b.configuration = cfg;
+    }
+}
+
+- (void)statsItemTapped:(UIButton *)sender {
+    NSString *key = statsItemDefs()[sender.tag][0];
+    if ([_statsItemsOn containsObject:key]) {
+        [_statsItemsOn removeObject:key];
+    } else {
+        [_statsItemsOn addObject:key];
+    }
+    [[NSUserDefaults standardUserDefaults] setObject:_statsItemsOn.allObjects forKey:kStatsItemsKey];
+    [self refreshStatsItemButtons];
+    if (_statsMode != 1) {
+        _statsSegment.selectedSegmentIndex = 1;
+        [self setStatsMode:1];
+    } else {
+        [self updateStatsOverlay];
+    }
+}
+
 - (void)touchSegmentChanged:(UISegmentedControl *)seg {
     [_streamView setAbsoluteTouchMode:seg.selectedSegmentIndex == 1];
 }
@@ -1231,22 +1310,25 @@ static char modifierForVk(short vk) {
         _compactStatsLabel.font = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightMedium];
         _compactStatsLabel.textColor = [UIColor colorWithWhite:1 alpha:0.9];
         _compactStatsLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-        _compactStatsLabel.textAlignment = NSTextAlignmentCenter;
+        _compactStatsLabel.numberOfLines = 0;
         _compactStatsLabel.layer.cornerRadius = 6;
         _compactStatsLabel.clipsToBounds = YES;
         _compactStatsLabel.userInteractionEnabled = NO;
         [self.view addSubview:_compactStatsLabel];
     }
     if (text == nil) {
-        _compactStatsLabel.hidden = YES;
-        return;
+        // Keep the box visible so "no stats yet" is distinguishable from "overlay broken"
+        text = @"等待统计数据…";
     }
     _compactStatsLabel.hidden = NO;
-    _compactStatsLabel.text = text;
-    [_compactStatsLabel sizeToFit];
+    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+    ps.firstLineHeadIndent = 7;
+    ps.headIndent = 7;
+    ps.lineSpacing = 2;
+    _compactStatsLabel.attributedText = [[NSAttributedString alloc] initWithString:text attributes:@{NSParagraphStyleAttributeName: ps}];
     UIEdgeInsets inset = self.view.safeAreaInsets;
-    CGSize sz = _compactStatsLabel.bounds.size;
-    _compactStatsLabel.frame = CGRectMake(inset.left + 8, inset.top + 4, sz.width + 14, sz.height + 6);
+    CGSize sz = [_compactStatsLabel sizeThatFits:CGSizeMake(self.view.bounds.size.width / 2, CGFLOAT_MAX)];
+    _compactStatsLabel.frame = CGRectMake(inset.left + 8, inset.top + 4, sz.width + 14, sz.height + 8);
     [self.view bringSubviewToFront:_compactStatsLabel];
     if (_sidePanelOpen) {
         [self.view bringSubviewToFront:_sideDim];

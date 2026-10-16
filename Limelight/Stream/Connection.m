@@ -178,6 +178,14 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
     
     currentVideoStats.receivedFrames++;
     currentVideoStats.totalFrames++;
+    if (decodeUnit->enqueueTimeUs >= decodeUnit->receiveTimeUs) {
+        currentVideoStats.totalReceiveUs += decodeUnit->enqueueTimeUs - decodeUnit->receiveTimeUs;
+    }
+    uint64_t nowUs = LiGetMicroseconds();
+    if (nowUs >= decodeUnit->enqueueTimeUs) {
+        currentVideoStats.totalQueueUs += nowUs - decodeUnit->enqueueTimeUs;
+    }
+    currentVideoStats.totalBytes += decodeUnit->fullLength;
 
     PLENTRY entry = decodeUnit->bufferList;
     while (entry != NULL) {

@@ -17,5 +17,6 @@
 
 - (NSString*) getStatsOverlayText;
 - (NSString*) getCompactStatsText;
+- (NSDictionary<NSString*, NSString*>*) getStatsItems;
 
 @end

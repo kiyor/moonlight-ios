@@ -148,6 +148,34 @@
 }
 
 - (NSString*) getCompactStatsText {
+    NSDictionary *d = [self getStatsItems];
+    if (d == nil) {
+        return nil;
+    }
+    return [NSString stringWithFormat:@"%@ FPS · 延迟 %@ · 丢帧 %@", d[@"fps"], d[@"net"], d[@"loss"]];
+}
+
+- (NSDictionary<NSString*, NSString*>*) getStatsItems {
+    video_stats_t stats;
+    if (!_connection || ![_connection getVideoStats:&stats]) {
+        return nil;
+    }
+    NSMutableDictionary *d = [NSMutableDictionary dictionary];
+    float interval = stats.endTime - stats.startTime;
+    d[@"res"] = [NSString stringWithFormat:@"%dx%d", _config.width, _config.height];
+    d[@"fps"] = [NSString stringWithFormat:@"%.1f / %d", interval > 0 ? stats.totalFrames / interval : 0, _config.frameRate];
+    d[@"codec"] = [_connection getActiveCodecName];
+    uint32_t rtt, var;
+    d[@"net"] = LiGetEstimatedRttInfo(&rtt, &var) ? [NSString stringWithFormat:@"%u ms ±%u", rtt, var] : @"--";
+    d[@"loss"] = [NSString stringWithFormat:@"%.1f%%", stats.totalFrames > 0 ? stats.networkDroppedFrames * 100.f / stats.totalFrames : 0];
+    d[@"host"] = stats.framesWithHostProcessingLatency ? [NSString stringWithFormat:@"%.1f ms", (float)stats.totalHostProcessingLatency / stats.framesWithHostProcessingLatency / 10.f] : @"--";
+    d[@"recv"] = stats.receivedFrames ? [NSString stringWithFormat:@"%.1f ms", stats.totalReceiveUs / (double)stats.receivedFrames / 1000.0] : @"--";
+    d[@"queue"] = stats.receivedFrames ? [NSString stringWithFormat:@"%.1f ms", stats.totalQueueUs / (double)stats.receivedFrames / 1000.0] : @"--";
+    d[@"bitrate"] = interval > 0 ? [NSString stringWithFormat:@"%.1f Mbps", stats.totalBytes * 8.0 / interval / 1e6] : @"--";
+    return d;
+}
+
+- (NSString*) getCompactStatsTextOld {
     video_stats_t stats;
 
     if (!_connection) {
