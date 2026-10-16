@@ -185,6 +185,7 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
     MLOptionGroup *_bitrateGroup;
     BOOL _reconnecting;
     BOOL _resumeOnForeground;
+    UIView *_vmouseView;
 #endif
 }
 
@@ -1196,7 +1197,113 @@ static const CGFloat kSideHandleHeight = 64;
     [_touchSegment addTarget:self action:@selector(touchSegmentChanged:) forControlEvents:UIControlEventValueChanged];
     [touch addArrangedSubview:_touchSegment];
     [touch addArrangedSubview:[self sideHint:@"触控板：手指滑动移动光标，轻点为左键。\n直接点击：点哪里就点哪里。"]];
+    [touch setCustomSpacing:18 afterView:touch.arrangedSubviews.lastObject];
+    [touch addArrangedSubview:[self sideSectionLabel:@"虚拟鼠标按键"]];
+    MLOptionGroup *vm = [[MLOptionGroup alloc] initWithItems:@[@"显示", @"隐藏"]];
+    vm.selectedSegmentIndex = [[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.vmouse"] ? 0 : 1;
+    __weak typeof(self) wsv = self;
+    [vm addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        BOOL on = ((MLOptionGroup *)a.sender).selectedSegmentIndex == 0;
+        [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"moonlight.vmouse"];
+        [wsv setVirtualMouseVisible:on];
+    }] forControlEvents:UIControlEventValueChanged];
+    [touch addArrangedSubview:vm];
+    [touch addArrangedSubview:[self sideHint:@"屏上浮一组左键 / 中键 / 右键和滚轮，按住可拖动左键实现框选拖拽。长按空白处拖动整组换位置。"]];
     _sidePages[@"touch"] = [self sideScrollPage:touch];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.vmouse"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [wsv setVirtualMouseVisible:YES]; });
+    }
+}
+
+#pragma mark - 虚拟鼠标按键
+
+- (UIButton *)vmouseButton:(NSString *)title button:(int)btn {
+    UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
+    cfg.title = title;
+    cfg.baseForegroundColor = [UIColor colorWithWhite:1 alpha:0.9];
+    cfg.background.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+    cfg.background.strokeColor = [UIColor colorWithWhite:1 alpha:0.35];
+    cfg.background.strokeWidth = 1;
+    cfg.background.cornerRadius = 12;
+    UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
+    b.tag = btn;
+    // Press/release on touch down/up so holding left = drag
+    [b addTarget:self action:@selector(vmouseDown:) forControlEvents:UIControlEventTouchDown];
+    [b addTarget:self action:@selector(vmouseUp:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    return b;
+}
+
+- (void)vmouseDown:(UIButton *)b {
+    [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight].impactOccurred;
+    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, (int)b.tag);
+}
+
+- (void)vmouseUp:(UIButton *)b {
+    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, (int)b.tag);
+}
+
+- (void)vmouseScroll:(UIButton *)b {
+    LiSendScrollEvent(b.tag > 0 ? 1 : -1);
+}
+
+- (void)setVirtualMouseVisible:(BOOL)on {
+    if (!on) {
+        [_vmouseView removeFromSuperview];
+        _vmouseView = nil;
+        return;
+    }
+    if (_vmouseView != nil) {
+        return;
+    }
+    CGFloat w = 150, h = 120;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    CGPoint c = CGPointFromString([ud stringForKey:@"moonlight.vmousePos"] ?: @"");
+    if (CGPointEqualToPoint(c, CGPointZero)) {
+        c = CGPointMake(self.view.bounds.size.width - self.view.safeAreaInsets.right - w / 2 - 90, self.view.bounds.size.height - h / 2 - 20);
+    }
+    UIView *v = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, h)];
+    v.center = c;
+    UIButton *l = [self vmouseButton:@"左键" button:BUTTON_LEFT];
+    UIButton *m = [self vmouseButton:@"中" button:BUTTON_MIDDLE];
+    UIButton *r = [self vmouseButton:@"右键" button:BUTTON_RIGHT];
+    l.frame = CGRectMake(0, 0, 60, 70);
+    m.frame = CGRectMake(64, 0, 22, 70);
+    r.frame = CGRectMake(90, 0, 60, 70);
+    NSArray *scrolls = @[@[@"▲", @1], @[@"▼", @-1]];
+    for (NSUInteger i = 0; i < scrolls.count; i++) {
+        UIButton *s = [self vmouseButton:scrolls[i][0] button:0];
+        [s removeTarget:self action:NULL forControlEvents:UIControlEventAllEvents];
+        s.tag = [scrolls[i][1] intValue];
+        [s addTarget:self action:@selector(vmouseScroll:) forControlEvents:UIControlEventTouchUpInside];
+        s.frame = CGRectMake(i * 78, 76, 72, 44);
+        [v addSubview:s];
+    }
+    [v addSubview:l];
+    [v addSubview:m];
+    [v addSubview:r];
+    UILongPressGestureRecognizer *drag = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(vmouseDragged:)];
+    drag.minimumPressDuration = 0.4;
+    [v addGestureRecognizer:drag];
+    _vmouseView = v;
+    [self.view addSubview:v];
+    if (_sidePanelOpen) {
+        [self.view bringSubviewToFront:_sideDim];
+        [self.view bringSubviewToFront:_sidePanel];
+    }
+}
+
+- (void)vmouseDragged:(UILongPressGestureRecognizer *)g {
+    static CGPoint offset;
+    CGPoint p = [g locationInView:self.view];
+    if (g.state == UIGestureRecognizerStateBegan) {
+        offset = CGPointMake(_vmouseView.center.x - p.x, _vmouseView.center.y - p.y);
+        _vmouseView.alpha = 0.6;
+    } else if (g.state == UIGestureRecognizerStateChanged) {
+        _vmouseView.center = CGPointMake(p.x + offset.x, p.y + offset.y);
+    } else {
+        _vmouseView.alpha = 1;
+        [[NSUserDefaults standardUserDefaults] setObject:NSStringFromCGPoint(_vmouseView.center) forKey:@"moonlight.vmousePos"];
+    }
 
     __weak typeof(self) ws = self;
     UIStackView *q = [self sideSubStack:@"画质"];
