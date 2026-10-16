@@ -184,6 +184,7 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
     MLOptionGroup *_fpsGroup;
     MLOptionGroup *_bitrateGroup;
     BOOL _reconnecting;
+    BOOL _resumeOnForeground;
 #endif
 }
 
@@ -501,18 +502,65 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
         [_inactivityTimer invalidate];
         _inactivityTimer = nil;
     }
+    if (_resumeOnForeground) {
+        _resumeOnForeground = NO;
+        Log(LOG_I, @"Auto-reconnecting after returning to foreground");
+        [self startStreamAfterDelay:0.3 message:@"回到前台，正在重连…"];
+    }
 }
 
 // This fires when the home button is pressed
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-    Log(LOG_I, @"Terminating stream immediately for backgrounding");
-
     if (_inactivityTimer != nil) {
         [_inactivityTimer invalidate];
         _inactivityTimer = nil;
     }
     
+    if ([self autoReconnectEnabled] && _streamMan != nil) {
+        // iOS can't keep the stream alive in background. Stop it but stay on this screen,
+        // then reconnect (host resumes the same app) when we come back.
+        Log(LOG_I, @"Stopping stream for backgrounding, will reconnect on foreground");
+        _reconnecting = YES;
+        _resumeOnForeground = YES;
+        [_streamMan stopStream];
+        [self dropDisplayLayers];
+        return;
+    }
+    
+    Log(LOG_I, @"Terminating stream immediately for backgrounding");
     [self returnToMainFrame];
+}
+
+- (BOOL)autoReconnectEnabled {
+    id v = [[NSUserDefaults standardUserDefaults] objectForKey:@"moonlight.autoReconnect"];
+    return v == nil ? YES : [v boolValue];
+}
+
+- (void)dropDisplayLayers {
+    for (CALayer *l in [_streamView.layer.sublayers copy]) {
+        if ([l isKindOfClass:[AVSampleBufferDisplayLayer class]]) {
+            [l removeFromSuperlayer];
+        }
+    }
+}
+
+- (void)startStreamAfterDelay:(double)delay message:(NSString *)msg {
+    [_streamView setStreamAspectRatio:(float)self.streamConfig.width / (float)self.streamConfig.height];
+    _stageLabel.text = msg;
+    [_stageLabel sizeToFit];
+    _stageLabel.center = CGPointMake(self.view.bounds.size.width / 2, self.view.bounds.size.height / 2 + 50);
+    _stageLabel.hidden = NO;
+    [self.view bringSubviewToFront:_stageLabel];
+    [self.view bringSubviewToFront:_spinner];
+    [_spinner startAnimating];
+    _reconnecting = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        self->_streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
+                                                      renderView:self->_streamView
+                                             connectionCallbacks:self];
+        NSOperationQueue *q = [[NSOperationQueue alloc] init];
+        [q addOperation:self->_streamMan];
+    });
 }
 
 - (void)edgeSwiped {
@@ -1170,6 +1218,15 @@ static const CGFloat kSideHandleHeight = 64;
     apply.configuration = ac;
     [q addArrangedSubview:apply];
     [q addArrangedSubview:[self sideHint:@"点「应用」后画面断开约 2 秒，用新参数重连，游戏不受影响。只改本次串流，不改默认设置。"]];
+    [q setCustomSpacing:18 afterView:q.arrangedSubviews.lastObject];
+    [q addArrangedSubview:[self sideSectionLabel:@"切到后台再回来"]];
+    MLOptionGroup *ar = [[MLOptionGroup alloc] initWithItems:@[@"自动重连", @"退出串流"]];
+    ar.selectedSegmentIndex = [self autoReconnectEnabled] ? 0 : 1;
+    [ar addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        [[NSUserDefaults standardUserDefaults] setBool:((MLOptionGroup *)a.sender).selectedSegmentIndex == 0 forKey:@"moonlight.autoReconnect"];
+    }] forControlEvents:UIControlEventValueChanged];
+    [q addArrangedSubview:ar];
+    [q addArrangedSubview:[self sideHint:@"iOS 不允许后台保持串流。自动重连：切回来后停在串流页直接重连，主机游戏继续。"]];
     _sidePages[@"quality"] = [self sideScrollPage:q];
 }
 
