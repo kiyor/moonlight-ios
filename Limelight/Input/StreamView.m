@@ -181,6 +181,21 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     [onScreenControls setLevel:level];
     [onScreenControls show];
 }
+
+- (void) setAbsoluteTouchMode:(BOOL)absolute {
+    if (absolute == [self isAbsoluteTouchMode]) {
+        return;
+    }
+    if (absolute) {
+        touchHandler = [[AbsoluteTouchHandler alloc] initWithView:self];
+    } else {
+        touchHandler = [[RelativeTouchHandler alloc] initWithView:self];
+    }
+}
+
+- (BOOL) isAbsoluteTouchMode {
+    return [touchHandler isKindOfClass:[AbsoluteTouchHandler class]];
+}
 #endif
 
 - (CGSize) getVideoAreaSize {

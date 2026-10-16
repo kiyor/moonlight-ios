@@ -58,6 +58,7 @@
     UIVisualEffectView *_sidePanel;
     UISegmentedControl *_oscSegment;
     UISegmentedControl *_statsSegment;
+    UISegmentedControl *_touchSegment;
     UILabel *_compactStatsLabel;
     NSInteger _statsMode; // 0 off, 1 compact, 2 full
     BOOL _sidePanelOpen;
@@ -755,18 +756,27 @@ static const CGFloat kSideHandleHeight = 64;
     _statsSegment = [[UISegmentedControl alloc] initWithItems:@[@"关", @"精简", @"完整"]];
     [_statsSegment addTarget:self action:@selector(statsSegmentChanged:) forControlEvents:UIControlEventValueChanged];
 
+    UILabel *touchLabel = [[UILabel alloc] init];
+    touchLabel.text = @"触控模式";
+    touchLabel.font = [UIFont systemFontOfSize:13];
+    touchLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    _touchSegment = [[UISegmentedControl alloc] initWithItems:@[@"触控板", @"直接点击"]];
+    [_touchSegment addTarget:self action:@selector(touchSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+
     UIButton *keyboardBtn = [self sidePanelButton:@"键盘" symbol:@"keyboard" action:@selector(sideKeyboardTapped)];
     UIButton *disconnectBtn = [self sidePanelButton:@"断开连接" symbol:@"xmark.circle" action:@selector(sideDisconnectTapped)];
     UIButtonConfiguration *dcfg = disconnectBtn.configuration;
     dcfg.baseForegroundColor = UIColor.systemRedColor;
     disconnectBtn.configuration = dcfg;
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, statsLabel, _statsSegment, keyboardBtn]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, oscLabel, _oscSegment, touchLabel, _touchSegment, statsLabel, _statsSegment, keyboardBtn]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 12;
     [stack setCustomSpacing:20 afterView:title];
     [stack setCustomSpacing:6 afterView:oscLabel];
     [stack setCustomSpacing:20 afterView:_oscSegment];
+    [stack setCustomSpacing:6 afterView:touchLabel];
+    [stack setCustomSpacing:20 afterView:_touchSegment];
     [stack setCustomSpacing:6 afterView:statsLabel];
     [stack setCustomSpacing:20 afterView:_statsSegment];
     [stack setCustomSpacing:20 afterView:keyboardBtn];
@@ -967,6 +977,7 @@ static char modifierForVk(short vk) {
     _sidePanelOpen = YES;
     [self syncOscSegment];
     _statsSegment.selectedSegmentIndex = _statsMode;
+    _touchSegment.selectedSegmentIndex = [_streamView isAbsoluteTouchMode] ? 1 : 0;
     [self.view bringSubviewToFront:_sideDim];
     [self.view bringSubviewToFront:_sidePanel];
     _sideDim.hidden = NO;
@@ -1018,6 +1029,10 @@ static char modifierForVk(short vk) {
 
 - (void)statsSegmentChanged:(UISegmentedControl *)seg {
     [self setStatsMode:seg.selectedSegmentIndex];
+}
+
+- (void)touchSegmentChanged:(UISegmentedControl *)seg {
+    [_streamView setAbsoluteTouchMode:seg.selectedSegmentIndex == 1];
 }
 
 - (void)setStatsMode:(NSInteger)mode {
