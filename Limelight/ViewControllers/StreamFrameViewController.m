@@ -33,6 +33,7 @@
 @end
 
 static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
+static char modifierForVk(short vk);
 
 // Windows virtual-key codes
 #define VK_WIN 0x5B
@@ -133,6 +134,83 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
 }
 @end
 
+// Full-screen container that only catches touches landing on its subviews
+@interface MLPassthroughView : UIView
+@end
+@implementation MLPassthroughView
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
+    UIView *v = [super hitTest:p withEvent:e];
+    return v == self ? nil : v;
+}
+@end
+
+// 8-way virtual stick that holds W/A/S/D on the host
+@interface MLWasdStick : UIView
+@property (nonatomic) BOOL editing;
+@end
+@implementation MLWasdStick {
+    UIView *_knob;
+    int _held; // W=1 A=2 S=4 D=8
+}
+- (instancetype)initWithFrame:(CGRect)f {
+    self = [super initWithFrame:f];
+    if (self) {
+        self.layer.cornerRadius = f.size.width / 2;
+        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3];
+        self.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
+        self.layer.borderWidth = 1;
+        CGFloat k = f.size.width * 0.42;
+        _knob = [[UIView alloc] initWithFrame:CGRectMake(0, 0, k, k)];
+        _knob.layer.cornerRadius = k / 2;
+        _knob.backgroundColor = [UIColor colorWithWhite:1 alpha:0.5];
+        _knob.userInteractionEnabled = NO;
+        _knob.center = CGPointMake(f.size.width / 2, f.size.height / 2);
+        [self addSubview:_knob];
+    }
+    return self;
+}
+- (void)apply:(int)want {
+    static const short vks[4] = {0x57, 0x41, 0x53, 0x44};
+    for (int i = 0; i < 4; i++) {
+        int bit = 1 << i;
+        if ((want & bit) != (_held & bit)) {
+            LiSendKeyboardEvent(vks[i], (want & bit) ? KEY_ACTION_DOWN : KEY_ACTION_UP, 0);
+        }
+    }
+    _held = want;
+}
+- (void)track:(UITouch *)t {
+    CGPoint c = CGPointMake(self.bounds.size.width / 2, self.bounds.size.height / 2);
+    CGPoint p = [t locationInView:self];
+    CGFloat dx = p.x - c.x, dy = p.y - c.y, r = self.bounds.size.width / 2;
+    CGFloat d = hypot(dx, dy);
+    if (d > r) { dx = dx / d * r; dy = dy / d * r; }
+    _knob.center = CGPointMake(c.x + dx, c.y + dy);
+    int want = 0;
+    if (d > r * 0.3) {
+        int s = ((int)lround(atan2(-dy, dx) / (M_PI / 4)) + 8) % 8; // 0=E 2=N 4=W 6=S
+        static const int m[8] = {8, 1 | 8, 1, 1 | 2, 2, 2 | 4, 4, 4 | 8};
+        want = m[s];
+    }
+    [self apply:want];
+}
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)e {
+    if (!_editing) [self track:touches.anyObject];
+}
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)e {
+    if (!_editing) [self track:touches.anyObject];
+}
+- (void)releaseStick {
+    _knob.center = CGPointMake(self.bounds.size.width / 2, self.bounds.size.height / 2);
+    [self apply:0];
+}
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)e { [self releaseStick]; }
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)e { [self releaseStick]; }
+- (void)willMoveToSuperview:(UIView *)s {
+    if (s == nil) [self apply:0];
+}
+@end
+
 @implementation StreamFrameViewController {
     ControllerSupport *_controllerSupport;
     StreamManager *_streamMan;
@@ -186,6 +264,10 @@ static NSArray<NSArray<NSString *> *> *statsItemDefs(void);
     BOOL _reconnecting;
     BOOL _resumeOnForeground;
     UIView *_vmouseView;
+    MLPassthroughView *_keyOverlay;
+    NSMutableArray<NSDictionary *> *_keyLayout;
+    BOOL _keysVisible;
+    BOOL _keysEditing;
 #endif
 }
 
@@ -1115,6 +1197,7 @@ static const CGFloat kSideHandleHeight = 64;
         [self sideNavRow:@"性能信息" symbol:@"speedometer" page:@"stats"],
         [self sideNavRow:@"虚拟手柄" symbol:@"gamecontroller" page:@"osc"],
         [self sideNavRow:@"触控模式" symbol:@"cursorarrow.motionlines" page:@"touch"],
+        [self sideNavRow:@"自定义按键" symbol:@"square.grid.3x3" page:@"keys"],
     ]];
     rows.axis = UILayoutConstraintAxisVertical;
     rows.spacing = 6;
@@ -1225,6 +1308,8 @@ static const CGFloat kSideHandleHeight = 64;
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.vmouse"]) {
         dispatch_async(dispatch_get_main_queue(), ^{ [wsv setVirtualMouseVisible:YES]; });
     }
+    [self buildQualityPage];
+    [self buildKeysPage];
 }
 
 #pragma mark - 虚拟鼠标按键
@@ -1316,7 +1401,9 @@ static const CGFloat kSideHandleHeight = 64;
         _vmouseView.alpha = 1;
         [[NSUserDefaults standardUserDefaults] setObject:NSStringFromCGPoint(_vmouseView.center) forKey:@"moonlight.vmousePos"];
     }
+}
 
+- (void)buildQualityPage {
     __weak typeof(self) ws = self;
     UIStackView *q = [self sideSubStack:@"画质"];
     [q addArrangedSubview:[self sideSectionLabel:@"分辨率"]];
@@ -1347,6 +1434,168 @@ static const CGFloat kSideHandleHeight = 64;
     [q addArrangedSubview:ar];
     [q addArrangedSubview:[self sideHint:@"iOS 不允许后台保持串流。自动重连：切回来后停在串流页直接重连，主机游戏继续。"]];
     _sidePages[@"quality"] = [self sideScrollPage:q];
+}
+
+#pragma mark - 自定义按键布局
+
+static NSArray<NSArray *> *keyPresetDefs(void) {
+    return @[@[@"W", @0x57], @[@"A", @0x41], @[@"S", @0x53], @[@"D", @0x44], @[@"Q", @0x51], @[@"E", @0x45],
+             @[@"R", @0x52], @[@"F", @0x46], @[@"G", @0x47], @[@"空格", @0x20], @[@"Shift", @0xA0], @[@"Ctrl", @0xA2],
+             @[@"Alt", @0xA4], @[@"Tab", @0x09], @[@"Esc", @0x1B], @[@"回车", @0x0D], @[@"退格", @0x08],
+             @[@"1", @0x31], @[@"2", @0x32], @[@"3", @0x33], @[@"4", @0x34], @[@"5", @0x35],
+             @[@"M", @0x4D], @[@"I", @0x49], @[@"B", @0x42], @[@"↑", @0x26], @[@"↓", @0x28], @[@"←", @0x25], @[@"→", @0x27],
+             @[@"F1", @0x70], @[@"F5", @0x74]];
+}
+
+- (void)saveKeyLayout {
+    [[NSUserDefaults standardUserDefaults] setObject:_keyLayout forKey:@"moonlight.keyLayout"];
+}
+
+- (void)buildKeysPage {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSArray *saved = [ud arrayForKey:@"moonlight.keyLayout"];
+    _keyLayout = saved ? [saved mutableCopy] : [@[
+        @{@"n": @"WASD", @"k": @-1, @"x": @0.16, @"y": @0.70},
+        @{@"n": @"空格", @"k": @0x20, @"x": @0.88, @"y": @0.80},
+        @{@"n": @"Shift", @"k": @0xA0, @"x": @0.78, @"y": @0.88},
+        @{@"n": @"E", @"k": @0x45, @"x": @0.88, @"y": @0.62},
+    ] mutableCopy];
+    _keysVisible = [ud boolForKey:@"moonlight.keysVisible"];
+
+    __weak typeof(self) ws = self;
+    UIStackView *k = [self sideSubStack:@"自定义按键"];
+    MLOptionGroup *show = [[MLOptionGroup alloc] initWithItems:@[@"显示", @"隐藏"]];
+    show.selectedSegmentIndex = _keysVisible ? 0 : 1;
+    [show addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        typeof(self) ss = ws;
+        if (!ss) return;
+        ss->_keysVisible = ((MLOptionGroup *)a.sender).selectedSegmentIndex == 0;
+        [[NSUserDefaults standardUserDefaults] setBool:ss->_keysVisible forKey:@"moonlight.keysVisible"];
+        [ss rebuildKeyOverlay];
+    }] forControlEvents:UIControlEventValueChanged];
+    [k addArrangedSubview:show];
+    [k setCustomSpacing:14 afterView:show];
+    [k addArrangedSubview:[self sideTile:@"编辑布局" symbol:@"square.and.pencil" height:52 handler:^{
+        typeof(self) ss = ws;
+        if (!ss) return;
+        ss->_keysEditing = YES;
+        [ss closeSidePanel];
+        [ss rebuildKeyOverlay];
+    }]];
+    [k addArrangedSubview:[self sideHint:@"编辑时：拖动按键换位置，点按删除，顶部「添加」从键位表加键（含 WASD 摇杆）。布局自动保存，位置按屏幕比例记录。"]];
+    _sidePages[@"keys"] = [self sideScrollPage:k];
+    if (_keysVisible) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [ws rebuildKeyOverlay]; });
+    }
+}
+
+- (void)rebuildKeyOverlay {
+    [_keyOverlay removeFromSuperview];
+    _keyOverlay = nil;
+    if (!_keysVisible && !_keysEditing) {
+        return;
+    }
+    MLPassthroughView *ov = [[MLPassthroughView alloc] initWithFrame:self.view.bounds];
+    ov.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    CGSize sz = self.view.bounds.size;
+    for (NSUInteger i = 0; i < _keyLayout.count; i++) {
+        NSDictionary *d = _keyLayout[i];
+        UIView *v;
+        if ([d[@"k"] intValue] < 0) {
+            MLWasdStick *s = [[MLWasdStick alloc] initWithFrame:CGRectMake(0, 0, 130, 130)];
+            s.editing = _keysEditing;
+            v = s;
+        } else {
+            UIButton *b = [self vmouseButton:d[@"n"] button:0];
+            [b removeTarget:self action:NULL forControlEvents:UIControlEventAllEvents];
+            b.frame = CGRectMake(0, 0, 58, 58);
+            if (!_keysEditing) {
+                [b addTarget:self action:@selector(layoutKeyDown:) forControlEvents:UIControlEventTouchDown];
+                [b addTarget:self action:@selector(layoutKeyUp:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+            }
+            v = b;
+        }
+        v.tag = i;
+        v.center = CGPointMake([d[@"x"] doubleValue] * sz.width, [d[@"y"] doubleValue] * sz.height);
+        if (_keysEditing) {
+            v.layer.borderColor = UIColor.systemYellowColor.CGColor;
+            v.layer.borderWidth = 2;
+            v.layer.cornerRadius = [d[@"k"] intValue] < 0 ? 65 : 12;
+            [v addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(layoutKeyPanned:)]];
+            [v addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(layoutKeyTapped:)]];
+        }
+        [ov addSubview:v];
+    }
+    if (_keysEditing) {
+        ov.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
+        __weak typeof(self) ws = self;
+        UIButton *add = [self sideTile:@"添加" symbol:@"plus" height:52 handler:^{ [ws layoutAddTapped]; }];
+        UIButton *done = [self sideTile:@"完成" symbol:@"checkmark" height:52 handler:^{
+            typeof(self) ss = ws;
+            if (!ss) return;
+            ss->_keysEditing = NO;
+            [ss rebuildKeyOverlay];
+        }];
+        UIStackView *bar = [self sideTileRow:@[add, done]];
+        bar.frame = CGRectMake(sz.width / 2 - 90, self.view.safeAreaInsets.top + 8, 180, 52);
+        [ov addSubview:bar];
+    }
+    _keyOverlay = ov;
+    [self.view addSubview:ov];
+}
+
+- (void)layoutKeyDown:(UIButton *)b {
+    [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight].impactOccurred;
+    short vk = [_keyLayout[b.tag][@"k"] shortValue];
+    LiSendKeyboardEvent(vk, KEY_ACTION_DOWN, modifierForVk(vk));
+}
+
+- (void)layoutKeyUp:(UIButton *)b {
+    LiSendKeyboardEvent([_keyLayout[b.tag][@"k"] shortValue], KEY_ACTION_UP, 0);
+}
+
+- (void)layoutKeyPanned:(UIPanGestureRecognizer *)g {
+    UIView *v = g.view;
+    CGPoint t = [g translationInView:_keyOverlay];
+    v.center = CGPointMake(v.center.x + t.x, v.center.y + t.y);
+    [g setTranslation:CGPointZero inView:_keyOverlay];
+    if (g.state == UIGestureRecognizerStateEnded) {
+        CGSize sz = _keyOverlay.bounds.size;
+        NSMutableDictionary *d = [_keyLayout[v.tag] mutableCopy];
+        d[@"x"] = @(v.center.x / sz.width);
+        d[@"y"] = @(v.center.y / sz.height);
+        _keyLayout[v.tag] = d;
+        [self saveKeyLayout];
+    }
+}
+
+- (void)layoutKeyTapped:(UITapGestureRecognizer *)g {
+    [_keyLayout removeObjectAtIndex:g.view.tag];
+    [self saveKeyLayout];
+    [self rebuildKeyOverlay];
+}
+
+- (void)layoutAddKey:(NSString *)name vk:(int)vk {
+    [_keyLayout addObject:@{@"n": name, @"k": @(vk), @"x": @0.5, @"y": @0.5}];
+    [self saveKeyLayout];
+    [self rebuildKeyOverlay];
+}
+
+- (void)layoutAddTapped {
+    __weak typeof(self) ws = self;
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"添加按键" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [ac addAction:[UIAlertAction actionWithTitle:@"WASD 摇杆" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        [ws layoutAddKey:@"WASD" vk:-1];
+    }]];
+    for (NSArray *p in keyPresetDefs()) {
+        [ac addAction:[UIAlertAction actionWithTitle:p[0] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            [ws layoutAddKey:p[0] vk:[p[1] intValue]];
+        }]];
+    }
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    ac.popoverPresentationController.sourceView = self.view;
+    ac.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2, 60, 1, 1);
+    [self presentViewController:ac animated:YES completion:nil];
 }
 
 static NSArray<NSArray<NSNumber *> *> *qualityResDefs(void) {
