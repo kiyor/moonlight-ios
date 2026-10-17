@@ -1325,7 +1325,15 @@ static const CGFloat kSideHandleHeight = 64;
         [wsv setVirtualMouseVisible:on];
     }] forControlEvents:UIControlEventValueChanged];
     [touch addArrangedSubview:vm];
-    [touch addArrangedSubview:[self sideHint:@"屏上浮一组左键 / 中键 / 右键和滚轮，按住可拖动左键实现框选拖拽。画面两侧有黑边（如 4:3 游戏）时自动竖排停进黑边，不挡画面。长按空白处拖动整组换位置。"]];
+    [touch addArrangedSubview:[self sideHint:@"屏上一组左键 / 中键 / 右键和滚轮，按住可拖动左键实现框选拖拽。长按空白处拖动整组换位置。"]];
+    MLOptionGroup *dock = [[MLOptionGroup alloc] initWithItems:@[@"贴边竖排", @"浮在画面上"]];
+    dock.selectedSegmentIndex = [[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.vmouseFloat"] ? 1 : 0;
+    [dock addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        [[NSUserDefaults standardUserDefaults] setBool:((MLOptionGroup *)a.sender).selectedSegmentIndex == 1 forKey:@"moonlight.vmouseFloat"];
+        [wsv layoutVirtualMouse];
+    }] forControlEvents:UIControlEventValueChanged];
+    [touch addArrangedSubview:dock];
+    [touch addArrangedSubview:[self sideHint:@"贴边竖排：横屏时竖着贴在屏幕右边缘，4:3 游戏（魔力宝贝）正好落在右侧黑边里不挡画面。"]];
     [touch setCustomSpacing:18 afterView:touch.arrangedSubviews.lastObject];
     [touch addArrangedSubview:[self sideSectionLabel:@"实体手柄"]];
     MLOptionGroup *pm = [[MLOptionGroup alloc] initWithItems:@[@"手柄", @"当鼠标用"]];
@@ -1456,7 +1464,7 @@ static const CGFloat kSideHandleHeight = 64;
 // Black pillarbox beside the video (e.g. 4:3 game on a wide phone) that can host the mouse buttons; CGRectNull if too narrow.
 - (CGRect)vmouseBarRect {
     CGSize s = self.view.bounds.size;
-    if (_streamView == nil || s.height > s.width) {
+    if (_streamView == nil || s.height > s.width || [[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.vmouseFloat"]) {
         return CGRectNull;
     }
     CGRect vr = [_streamView videoRect];
@@ -1469,7 +1477,9 @@ static const CGFloat kSideHandleHeight = 64;
     if (lw >= 70) {
         return CGRectMake(lx, 0, lw, s.height);
     }
-    return CGRectNull;
+    // No client-side bar: the host may be pillarboxing inside the video (4:3 game, 16:9 stream). Hug the right edge.
+    CGFloat w = 110;
+    return CGRectMake(s.width - in.right - kSideHandleWidth - 4 - w, 0, w, s.height);
 }
 
 // Two layouts: vertical column docked in the black bar when there is one, else the compact floating group over the video.
