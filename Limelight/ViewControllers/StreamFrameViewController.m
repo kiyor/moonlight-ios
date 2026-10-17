@@ -2502,6 +2502,8 @@ static char modifierForVk(short vk) {
         return;
     }
     _sidePanelOpen = NO;
+    // Persist right away so the profile survives the app being killed instead of exited normally
+    [self saveProfile];
     CGSize s = self.view.bounds.size;
     CGFloat pw = [self sidePanelWidth];
     [UIView animateWithDuration:0.2 animations:^{
