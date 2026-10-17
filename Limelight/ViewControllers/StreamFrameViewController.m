@@ -1465,7 +1465,7 @@ static const CGFloat kSideHandleHeight = 64;
     __weak typeof(self) ws = self;
     UIStackView *q = [self sideSubStack:@"画质"];
     [q addArrangedSubview:[self sideSectionLabel:@"分辨率"]];
-    _resGroup = [[MLOptionGroup alloc] initWithItems:@[@"720p", @"1080p", @"1440p", @"4K", @"本机"]];
+    _resGroup = [[MLOptionGroup alloc] initWithItems:@[@"4:3", @"720p", @"1080p", @"1440p", @"4K", @"本机"]];
     [q addArrangedSubview:_resGroup];
     [q setCustomSpacing:14 afterView:_resGroup];
     [q addArrangedSubview:[self sideSectionLabel:@"帧率"]];
@@ -1671,7 +1671,8 @@ static NSArray<NSArray *> *keyPresetDefs(void) {
 }
 
 static NSArray<NSArray<NSNumber *> *> *qualityResDefs(void) {
-    return @[@[@1280, @720], @[@1920, @1080], @[@2560, @1440], @[@3840, @2160], @[@0, @0]];
+    // 4:3 = 800x600，给魔力宝贝这类老游戏：主机端 cg-stream.ps1 把桌面切到 800x600，同尺寸串流不补黑边不缩放
+    return @[@[@800, @600], @[@1280, @720], @[@1920, @1080], @[@2560, @1440], @[@3840, @2160], @[@0, @0]];
 }
 static NSArray<NSNumber *> *qualityFpsDefs(void) { return @[@30, @60, @90, @120]; }
 static NSArray<NSNumber *> *qualityBitrateDefs(void) { return @[@5, @10, @20, @30, @50, @80]; }
