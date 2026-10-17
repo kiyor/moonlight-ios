@@ -26,6 +26,8 @@
 
 // 手柄键鼠模式: left stick = mouse, right stick = wheel, A = left click, B = right click, X = middle
 @property (nonatomic) BOOL padMouseMode;
+// A = mouse left, B = mouse right; sticks/other buttons stay a gamepad. Applies to virtual (OSC) and physical pads.
+@property (nonatomic) BOOL abMouseMode;
 
 -(void) initAutoOnScreenControlMode:(OnScreenControls*)osc;
 -(void) cleanup;

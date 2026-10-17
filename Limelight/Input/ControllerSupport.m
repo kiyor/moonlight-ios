@@ -360,15 +360,22 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             }
             
             // Player 1 is always present for OSC
-            if (_padMouseMode) {
+            if (_padMouseMode || _abMouseMode) {
                 uint32_t changed = buttonFlags ^ _padMouseButtons;
                 int map[][2] = {{A_FLAG, BUTTON_LEFT}, {B_FLAG, BUTTON_RIGHT}, {X_FLAG, BUTTON_MIDDLE}};
-                for (int i = 0; i < 3; i++) {
+                int n = _padMouseMode ? 3 : 2;
+                for (int i = 0; i < n; i++) {
                     if (changed & map[i][0]) {
                         LiSendMouseButtonEvent((buttonFlags & map[i][0]) ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, map[i][1]);
                     }
                 }
                 _padMouseButtons = buttonFlags;
+            }
+            if (!_padMouseMode && _abMouseMode) {
+                // A/B-as-mouse only: sticks and all other buttons stay a normal gamepad (virtual or physical)
+                buttonFlags &= ~(A_FLAG | B_FLAG);
+            }
+            if (_padMouseMode) {
                 _padLX = leftStickX;
                 _padLY = leftStickY;
                 _padRY = rightStickY;
@@ -1258,6 +1265,16 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     [self cleanupControllersAndObservers];
 }
 
+-(void) setAbMouseMode:(BOOL)on
+{
+    _abMouseMode = on;
+    if (!on && !_padMouseMode) {
+        if (_padMouseButtons & A_FLAG) LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+        if (_padMouseButtons & B_FLAG) LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+        _padMouseButtons = 0;
+    }
+}
+
 -(void) setPadMouseMode:(BOOL)on
 {
     _padMouseMode = on;
@@ -1273,6 +1290,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             }
         }
         _padMouseButtons = 0;
+        if (_abMouseMode) return;
         return;
     }
     __weak typeof(self) ws = self;

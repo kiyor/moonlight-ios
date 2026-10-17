@@ -1337,6 +1337,20 @@ static const CGFloat kSideHandleHeight = 64;
     }] forControlEvents:UIControlEventValueChanged];
     [touch addArrangedSubview:pm];
     [touch addArrangedSubview:[self sideHint:@"当鼠标用：左摇杆移动光标，右摇杆滚轮，A 左键 / B 右键 / X 中键；其余按键照常发给主机。只对本次串流有效。"]];
+    [touch setCustomSpacing:18 afterView:touch.arrangedSubviews.lastObject];
+    [touch addArrangedSubview:[self sideSectionLabel:@"A / B 键"]];
+    MLOptionGroup *ab = [[MLOptionGroup alloc] initWithItems:@[@"手柄键", @"鼠标左右键"]];
+    BOOL abOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.abMouse"];
+    ab.selectedSegmentIndex = abOn ? 1 : 0;
+    _controllerSupport.abMouseMode = abOn;
+    [ab addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        typeof(self) ss = wsv;
+        BOOL on = ((MLOptionGroup *)a.sender).selectedSegmentIndex == 1;
+        [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"moonlight.abMouse"];
+        if (ss) ss->_controllerSupport.abMouseMode = on;
+    }] forControlEvents:UIControlEventValueChanged];
+    [touch addArrangedSubview:ab];
+    [touch addArrangedSubview:[self sideHint:@"鼠标左右键：虚拟手柄和实体手柄的 A = 鼠标左键、B = 鼠标右键，摇杆和其他键不变。适合魔力宝贝这类点鼠标的游戏；配合直触模式点位置、A/B 点击。会记住。"]];
     _sidePages[@"touch"] = [self sideScrollPage:touch];
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"moonlight.vmouse"]) {
         dispatch_async(dispatch_get_main_queue(), ^{ [wsv setVirtualMouseVisible:YES]; });
