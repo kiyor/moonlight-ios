@@ -264,6 +264,7 @@ static char modifierForVk(short vk);
     BOOL _reconnecting;
     BOOL _resumeOnForeground;
     UIView *_vmouseView;
+    BOOL _vmouseInBar;
     NSTimer *_hapticTimer;
     UIImpactFeedbackGenerator *_hapticGen;
     CFTimeInterval _lastHaptic;
@@ -1324,7 +1325,7 @@ static const CGFloat kSideHandleHeight = 64;
         [wsv setVirtualMouseVisible:on];
     }] forControlEvents:UIControlEventValueChanged];
     [touch addArrangedSubview:vm];
-    [touch addArrangedSubview:[self sideHint:@"屏上浮一组左键 / 中键 / 右键和滚轮，按住可拖动左键实现框选拖拽。长按空白处拖动整组换位置。"]];
+    [touch addArrangedSubview:[self sideHint:@"屏上浮一组左键 / 中键 / 右键和滚轮，按住可拖动左键实现框选拖拽。画面两侧有黑边（如 4:3 游戏）时自动竖排停进黑边，不挡画面。长按空白处拖动整组换位置。"]];
     [touch setCustomSpacing:18 afterView:touch.arrangedSubviews.lastObject];
     [touch addArrangedSubview:[self sideSectionLabel:@"实体手柄"]];
     MLOptionGroup *pm = [[MLOptionGroup alloc] initWithItems:@[@"手柄", @"当鼠标用"]];
@@ -1424,29 +1425,19 @@ static const CGFloat kSideHandleHeight = 64;
     if (_vmouseView != nil) {
         return;
     }
-    CGFloat w = 150, h = 120;
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    CGPoint c = CGPointFromString([ud stringForKey:@"moonlight.vmousePos"] ?: @"");
-    if (CGPointEqualToPoint(c, CGPointZero)) {
-        c = CGPointMake(self.view.bounds.size.width - self.view.safeAreaInsets.right - w / 2 - 90, self.view.bounds.size.height - h / 2 - 20);
-    }
-    UIView *v = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, h)];
-    v.center = c;
+    UIView *v = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 150, 120)];
     UIButton *l = [self vmouseButton:@"左键" button:BUTTON_LEFT];
     UIButton *m = [self vmouseButton:@"中" button:BUTTON_MIDDLE];
     UIButton *r = [self vmouseButton:@"右键" button:BUTTON_RIGHT];
-    l.frame = CGRectMake(0, 0, 60, 70);
-    m.frame = CGRectMake(64, 0, 22, 70);
-    r.frame = CGRectMake(90, 0, 60, 70);
     NSArray *scrolls = @[@[@"▲", @1], @[@"▼", @-1]];
     for (NSUInteger i = 0; i < scrolls.count; i++) {
         UIButton *s = [self vmouseButton:scrolls[i][0] button:0];
         [s removeTarget:self action:NULL forControlEvents:UIControlEventAllEvents];
         s.tag = [scrolls[i][1] intValue];
         [s addTarget:self action:@selector(vmouseScroll:) forControlEvents:UIControlEventTouchUpInside];
-        s.frame = CGRectMake(i * 78, 76, 72, 44);
         [v addSubview:s];
     }
+    // Subview order is relied on by layoutVirtualMouse: [scrollUp, scrollDown, left, middle, right]
     [v addSubview:l];
     [v addSubview:m];
     [v addSubview:r];
@@ -1455,10 +1446,71 @@ static const CGFloat kSideHandleHeight = 64;
     [v addGestureRecognizer:drag];
     _vmouseView = v;
     [self.view addSubview:v];
+    [self layoutVirtualMouse];
     if (_sidePanelOpen) {
         [self.view bringSubviewToFront:_sideDim];
         [self.view bringSubviewToFront:_sidePanel];
     }
+}
+
+// Black pillarbox beside the video (e.g. 4:3 game on a wide phone) that can host the mouse buttons; CGRectNull if too narrow.
+- (CGRect)vmouseBarRect {
+    CGSize s = self.view.bounds.size;
+    if (_streamView == nil || s.height > s.width) {
+        return CGRectNull;
+    }
+    CGRect vr = [_streamView videoRect];
+    UIEdgeInsets in = self.view.safeAreaInsets;
+    CGFloat rx = CGRectGetMaxX(vr) + 6, rw = s.width - in.right - kSideHandleWidth - 4 - rx;
+    CGFloat lx = in.left + 6, lw = CGRectGetMinX(vr) - 6 - lx;
+    if (rw >= 70) {
+        return CGRectMake(rx, 0, rw, s.height);
+    }
+    if (lw >= 70) {
+        return CGRectMake(lx, 0, lw, s.height);
+    }
+    return CGRectNull;
+}
+
+// Two layouts: vertical column docked in the black bar when there is one, else the compact floating group over the video.
+// Each layout remembers its own dragged position.
+- (void)layoutVirtualMouse {
+    if (_vmouseView == nil) {
+        return;
+    }
+    NSArray<UIView *> *sv = _vmouseView.subviews;
+    UIView *up = sv[0], *down = sv[1], *l = sv[2], *m = sv[3], *r = sv[4];
+    CGSize s = self.view.bounds.size;
+    CGRect bar = [self vmouseBarRect];
+    _vmouseInBar = !CGRectIsNull(bar);
+    CGFloat w, h;
+    CGPoint c;
+    if (_vmouseInBar) {
+        w = MIN(bar.size.width, 120);
+        CGFloat bh = MIN(96, (s.height - 24 - 34 - 44 - 18) / 2);
+        l.frame = CGRectMake(0, 0, w, bh);
+        r.frame = CGRectMake(0, bh + 6, w, bh);
+        m.frame = CGRectMake(0, bh * 2 + 12, w, 34);
+        up.frame = CGRectMake(0, bh * 2 + 52, (w - 6) / 2, 44);
+        down.frame = CGRectMake((w + 6) / 2, bh * 2 + 52, (w - 6) / 2, 44);
+        h = bh * 2 + 96;
+        c = CGPointMake(CGRectGetMidX(bar), s.height / 2);
+    } else {
+        w = 150;
+        h = 120;
+        l.frame = CGRectMake(0, 0, 60, 70);
+        m.frame = CGRectMake(64, 0, 22, 70);
+        r.frame = CGRectMake(90, 0, 60, 70);
+        up.frame = CGRectMake(0, 76, 72, 44);
+        down.frame = CGRectMake(78, 76, 72, 44);
+        c = CGPointMake(s.width - self.view.safeAreaInsets.right - w / 2 - 90, s.height - h / 2 - 20);
+    }
+    CGPoint saved = CGPointFromString([[NSUserDefaults standardUserDefaults] stringForKey:_vmouseInBar ? @"moonlight.vmousePosBar" : @"moonlight.vmousePos"] ?: @"");
+    if (!CGPointEqualToPoint(saved, CGPointZero)) {
+        c = saved;
+    }
+    _vmouseView.bounds = CGRectMake(0, 0, w, h);
+    _vmouseView.center = CGPointMake(MIN(MAX(c.x, w / 2), s.width - w / 2), MIN(MAX(c.y, h / 2), s.height - h / 2));
 }
 
 - (void)vmouseDragged:(UILongPressGestureRecognizer *)g {
@@ -1471,7 +1523,7 @@ static const CGFloat kSideHandleHeight = 64;
         _vmouseView.center = CGPointMake(p.x + offset.x, p.y + offset.y);
     } else {
         _vmouseView.alpha = 1;
-        [[NSUserDefaults standardUserDefaults] setObject:NSStringFromCGPoint(_vmouseView.center) forKey:@"moonlight.vmousePos"];
+        [[NSUserDefaults standardUserDefaults] setObject:NSStringFromCGPoint(_vmouseView.center) forKey:_vmouseInBar ? @"moonlight.vmousePosBar" : @"moonlight.vmousePos"];
     }
 }
 
@@ -2267,11 +2319,7 @@ static char modifierForVk(short vk) {
     _stageLabel.center = CGPointMake(s.width / 2, s.height / 2);
     _spinner.center = CGPointMake(s.width / 2, s.height / 2 - _stageLabel.frame.size.height - _spinner.frame.size.height);
     _tipLabel.center = CGPointMake(s.width / 2, s.height * 0.9);
-    if (_vmouseView != nil) {
-        CGPoint c = _vmouseView.center;
-        CGFloat hw = _vmouseView.bounds.size.width / 2, hh = _vmouseView.bounds.size.height / 2;
-        _vmouseView.center = CGPointMake(MIN(MAX(c.x, hw), s.width - hw), MIN(MAX(c.y, hh), s.height - hh));
-    }
+    [self layoutVirtualMouse];
     if (_keyOverlay != nil) {
         // Key positions are stored as screen ratios; rebuild so they land on the new size
         [self rebuildKeyOverlay];
