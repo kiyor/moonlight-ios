@@ -635,6 +635,19 @@ static NSMutableSet* hostList;
 #endif
     
     _streamConfig.bitRate = [streamSettings.bitrate intValue];
+    // Per host+game profile saved when the last stream of this game ended (resolution/fps/bitrate)
+    _streamConfig.hostUUID = app.host.uuid;
+    NSDictionary *prof = [[NSUserDefaults standardUserDefaults] dictionaryForKey:[NSString stringWithFormat:@"moonlight.profile.%@.%@", app.host.uuid, app.id]];
+    if ([prof[@"w"] intValue] > 0 && [prof[@"h"] intValue] > 0) {
+        _streamConfig.width = [prof[@"w"] intValue];
+        _streamConfig.height = [prof[@"h"] intValue];
+    }
+    if ([prof[@"fps"] intValue] > 0) {
+        _streamConfig.frameRate = MIN([prof[@"fps"] intValue], (int)[UIScreen mainScreen].maximumFramesPerSecond);
+    }
+    if ([prof[@"kbps"] intValue] > 0) {
+        _streamConfig.bitRate = [prof[@"kbps"] intValue];
+    }
     _streamConfig.optimizeGameSettings = streamSettings.optimizeGames;
     _streamConfig.playAudioOnPC = streamSettings.playAudioOnPC;
     _streamConfig.useFramePacing = streamSettings.useFramePacing;

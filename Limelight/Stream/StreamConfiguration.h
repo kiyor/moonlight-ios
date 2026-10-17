@@ -31,5 +31,7 @@
 @property BOOL multiController;
 @property BOOL useFramePacing;
 @property NSData* serverCert;
+// Host uuid; with appID it keys the per-host+game profile (moonlight.profile.<uuid>.<appID>)
+@property NSString* hostUUID;
 
 @end

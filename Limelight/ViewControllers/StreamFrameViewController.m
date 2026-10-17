@@ -308,6 +308,7 @@ static char modifierForVk(short vk);
     [UIApplication sharedApplication].idleTimerDisabled = YES;
     
     _settings = [[[DataManager alloc] init] getSettings];
+    [self applyProfileDefaults];
     
     _stageLabel = [[UILabel alloc] init];
     [_stageLabel setUserInteractionEnabled:NO];
@@ -549,7 +550,70 @@ static char modifierForVk(short vk);
     }
 }
 
+#pragma mark - Per host+game profile
+
+- (NSString *)profileKey {
+    if (self.streamConfig.hostUUID.length == 0 || self.streamConfig.appID.length == 0) {
+        return nil;
+    }
+    return [NSString stringWithFormat:@"moonlight.profile.%@.%@", self.streamConfig.hostUUID, self.streamConfig.appID];
+}
+
+// Before the side panel is built: seed the per-stream toggles it reads from NSUserDefaults
+- (void)applyProfileDefaults {
+    NSString *k = [self profileKey];
+    NSDictionary *p = k ? [[NSUserDefaults standardUserDefaults] dictionaryForKey:k] : nil;
+    if (p == nil) {
+        return;
+    }
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    for (NSString *key in @[@"vmouse", @"vmouseFloat", @"abMouse"]) {
+        if (p[key] != nil) {
+            [ud setBool:[p[key] boolValue] forKey:[@"moonlight." stringByAppendingString:key]];
+        }
+    }
+}
+
+// After the connection is up: gamepad overlay, touch mode, A/B mapping, virtual mouse
+- (void)applyProfileRuntime {
+    NSString *k = [self profileKey];
+    NSDictionary *p = k ? [[NSUserDefaults standardUserDefaults] dictionaryForKey:k] : nil;
+    if (p == nil) {
+        return;
+    }
+    if (p[@"osc"] != nil) {
+        [_streamView setOnScreenControlsLevel:(OnScreenControlsLevel)[p[@"osc"] integerValue]];
+    }
+    if (p[@"touch"] != nil) {
+        [_streamView setAbsoluteTouchMode:[p[@"touch"] boolValue]];
+    }
+    if (p[@"abMouse"] != nil) {
+        _controllerSupport.abMouseMode = [p[@"abMouse"] boolValue];
+    }
+    if (p[@"vmouse"] != nil) {
+        [self setVirtualMouseVisible:[p[@"vmouse"] boolValue]];
+    }
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+    [self refreshSideTiles];
+}
+
+- (void)saveProfile {
+    NSString *k = [self profileKey];
+    if (k == nil || _streamView == nil) {
+        return;
+    }
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    StreamConfiguration *c = self.streamConfig;
+    [ud setObject:@{
+        @"w": @(c.width), @"h": @(c.height), @"fps": @(c.frameRate), @"kbps": @(c.bitRate),
+        @"osc": @([_streamView getCurrentOscState]), @"touch": @([_streamView isAbsoluteTouchMode]),
+        @"vmouse": @([ud boolForKey:@"moonlight.vmouse"]), @"vmouseFloat": @([ud boolForKey:@"moonlight.vmouseFloat"]),
+        @"abMouse": @([ud boolForKey:@"moonlight.abMouse"]),
+    } forKey:k];
+}
+
 - (void) returnToMainFrame {
+    [self saveProfile];
     // Reset display mode back to default
     [self updatePreferredDisplayMode:NO];
     
@@ -682,6 +746,9 @@ static char modifierForVk(short vk);
         [self->_streamView showOnScreenControls];
         
         [self->_controllerSupport connectionEstablished];
+        if (!self->_reconnecting) {
+            [self applyProfileRuntime];
+        }
         
         if (self->_reconnecting) {
             // In-stream quality change: keep the user's current stats mode/timer
